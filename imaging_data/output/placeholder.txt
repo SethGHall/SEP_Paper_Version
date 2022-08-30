@@ -1,0 +1,1 @@
+ensures output folder is kept in repository (ie; not empty)

@@ -1,0 +1,15 @@
+---
+# Add custom overrides in here
+# anything present in default.yaml can be substituted here...
+
+# Natural = 0, Uniform = 1, Robust = 2
+WEIGHTING_SCHEME:                  0
+# Value should range from (-2.0 to +2.0)
+# -2.0 is close to uniform weighting
+# +2.0 is close to natural weighting
+ROBUSTNESS:                        0.0
+
+RETAIN_DEVICE_MEM:                 0
+SAVE_RESIDUAL_IMAGES:              0
+OVERSAMPLING:                      16 # must be power of 2
+NUM_MAJOR_CYCLES:                  2
