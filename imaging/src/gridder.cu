@@ -36,25 +36,14 @@ void gridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles
 	gridding_set_up(config, host, device);
 
 	// Perform gridding
-	start_timer(&timings->solver);
-	start_timer(&timings->gridder);
-	gridding_run(config, device);
-	stop_timer(&timings->gridder);	
-	
+	start_timer(&timings->solver, false);
+	gridding_run(config, host, device);
 	// Perform Inverse FFT
-	start_timer(&timings->fft);
 	fft_run(config, device);
-	stop_timer(&timings->fft);
-
 	// Perform Convolution Correction
-	start_timer(&timings->correction);
 	convolution_correction_run(config, device);
-	stop_timer(&timings->correction);
-	stop_timer(&timings->solver);	
+	stop_timer(&timings->solver, false);	
 	// Reset UV-plane for next major cycle
-	CUDA_CHECK_RETURN(cudaMemset(device->d_uv_grid, 0, config->grid_size * config->grid_size * sizeof(PRECISION2)));
-	cudaDeviceSynchronize();
-
 	if(!config->retain_device_mem)
 	{
 		// Transfer device mem back to host (only required data, and for retain data flag)
@@ -65,7 +54,6 @@ void gridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles
 	}
 }
 
-
 void degridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timings)
 {
 	// Set up - allocate device mem, transfer host mem to device
@@ -73,16 +61,13 @@ void degridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handl
 
 	source_list_to_image_run(config,device);
 	// Perform gridding
-	start_timer(&timings->predict);	
+	start_timer(&timings->predict, false);	
 	// Perform Convolution Correction
 	convolution_correction_run(config, device);
-
 	// Perform Inverse FFT
 	fft_run_degridding(config, device);
-
-	degridding_run(config, device);
-	
-	stop_timer(&timings->predict);	
+	degridding_run(config, host, device);
+	stop_timer(&timings->predict, false);	
 	// Reset UV-plane for next major cycle
 	
 	CUDA_CHECK_RETURN(cudaMemset(device->d_uv_grid, 0, config->grid_size * config->grid_size * sizeof(PRECISION2)));
@@ -90,10 +75,6 @@ void degridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handl
 
 	if(!config->retain_device_mem)
 	{
-		// Transfer device mem back to host (only required data, and for retain data flag)
-		degridding_memory_transfer(config, host, device);
-
-		// Clean up device
 		degridding_clean_up(device);
 	}
 }
@@ -132,32 +113,19 @@ void degridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handle
             CUDA_CHECK_RETURN(cudaMemcpy(device->d_sources, host->h_sources, sizeof(Source) * config->num_sources, cudaMemcpyHostToDevice));
         cudaDeviceSynchronize();
     }
-
 	if(device->d_visibilities == NULL)
-	{	
-		printf("UPDATE >>> Copying predicted visibilities to device, number of visibilities: %d...\n\n",config->num_visibilities);
-	    CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->num_visibilities));
-	    
+	{
+	    CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->vis_batch_size));
+	    cudaDeviceSynchronize();
 	}
 
-	CUDA_CHECK_RETURN(cudaMemset(device->d_visibilities, 0, config->num_visibilities * sizeof(VIS_PRECISION2)));
-	cudaDeviceSynchronize();
-	
+	// Visibility UVW coordinates
 	if(device->d_vis_uvw_coords == NULL)
-	{  	
-		printf("UPDATE >>> Copying UVW coords: %d...\n\n",config->num_visibilities);
-		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->num_visibilities));
-	    CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords, sizeof(PRECISION3) * config->num_visibilities,
-        	cudaMemcpyHostToDevice));
+	{
+		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->uvw_batch_size));
     	cudaDeviceSynchronize();
 	}
-
-	/*if(device->d_vis_weights == NULL)
-    {   printf("UPDATE >>> Allocating weights %d..\n\n", config->num_visibilities);
-        CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_weights), sizeof(VIS_PRECISION) * config->num_visibilities));
-        CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights, sizeof(VIS_PRECISION) * config->num_visibilities, cudaMemcpyHostToDevice));
-    }*/
-
+	
 	if(device->d_prolate == NULL)
     {   
     	printf("UPDATE >>> Allocating the prolate..\n\n");
@@ -206,7 +174,7 @@ void psf_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *dev
 	printf("UPDATE >>> Executing Gridding Pipeline for PSF generation...\n\n");
 	gridding_set_up(config, host, device);
 
-	gridding_run(config, device);
+	gridding_run(config, host, device);
 	fft_run(config, device);
 	convolution_correction_run(config, device);
 
@@ -232,6 +200,7 @@ void psf_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *dev
 
 
 
+
 void clean_device_vis_weights(Device_Mem_Handles *device)
 {
     if(device->d_vis_weights != NULL)
@@ -242,14 +211,13 @@ void clean_device_vis_weights(Device_Mem_Handles *device)
 void gridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
 {
 	// UV-Plane
+	int grid_square = config->grid_size * config->grid_size;
 	if(device->d_uv_grid == NULL)
 	{
 	    printf("UPDATE >>> Allocating new UV-grid device memory of size %d squared complex values...\n\n", config->grid_size);
-		int grid_square = config->grid_size * config->grid_size;
-		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_uv_grid), sizeof(PRECISION2) * grid_square));
-		CUDA_CHECK_RETURN(cudaMemset(device->d_uv_grid, 0, grid_square * sizeof(PRECISION2)));
+		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_uv_grid), sizeof(PRECISION2) * grid_square));	
 	}
-
+	CUDA_CHECK_RETURN(cudaMemset(device->d_uv_grid, 0, grid_square * sizeof(PRECISION2)));
 	// Convolution Kernels
 	if(device->d_kernels == NULL)
 	{
@@ -272,19 +240,14 @@ void gridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles 
 	// Visibilities
 	if(device->d_visibilities == NULL)
 	{
-	    printf("UPDATE >>> Copying predicted visibilities to device, number of visibilities: %d...\n\n",config->num_visibilities);
-	    CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->num_visibilities));
-	    CUDA_CHECK_RETURN(cudaMemcpy(device->d_visibilities, host->visibilities, sizeof(VIS_PRECISION2) * config->num_visibilities,
-	        cudaMemcpyHostToDevice));
+	    CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->vis_batch_size));
 	    cudaDeviceSynchronize();
 	}
 
 	// Visibility UVW coordinates
 	if(device->d_vis_uvw_coords == NULL)
 	{
-		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->num_visibilities));
-	    CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords, sizeof(PRECISION3) * config->num_visibilities,
-        	cudaMemcpyHostToDevice));
+		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->uvw_batch_size));
     	cudaDeviceSynchronize();
 	}
 
@@ -322,53 +285,127 @@ void gridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles 
     	cudaDeviceSynchronize();
 	}
 
-	if(config->enable_psf && device->d_vis_weights == NULL)
+	if(device->d_vis_weights == NULL)
 	{
-    	CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_weights), sizeof(VIS_PRECISION) * config->num_visibilities));
-    	CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights,
-			sizeof(VIS_PRECISION) * config->num_visibilities, cudaMemcpyHostToDevice));
+    	CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_weights), sizeof(VIS_PRECISION) * config->vis_batch_size));
+    	//CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights,
+		//	sizeof(VIS_PRECISION) * config->vis_batch_size, cudaMemcpyHostToDevice));
     	cudaDeviceSynchronize();
 	}
 }
 
-void gridding_run(Config *config, Device_Mem_Handles *device)
+
+void gridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
 {
-	int max_threads_per_block = min(config->gpu_max_threads_per_block, config->num_visibilities);
-	int num_blocks = (int) ceil((double) config->num_visibilities / max_threads_per_block);
-	dim3 kernel_blocks(num_blocks, 1, 1);
-	dim3 kernel_threads(max_threads_per_block, 1, 1);
+	int total_num_batches = (int)CEIL(double(config->num_timesteps) / double(config->timesteps_per_batch));
+		
+	int visLeftToProcess = config->num_host_visibilities;
+	int uwvLeftToProcess = config->num_host_uvws;
+	
+	PRECISION freq_inc = 0.0;
+	if(config->number_frequency_channels > 1)
+		freq_inc = PRECISION(config->frequency_bandwidth) / (config->number_frequency_channels-1); 
+	
+	for(int ts_batch=0;ts_batch<total_num_batches; ts_batch++)
+	{	//copy vis UVW here
+		//fill UVW and VIS
+		printf("Griddding batch number %d ...\n",ts_batch);
+		
+		int current_vis_batch_size = min(visLeftToProcess, config->vis_batch_size);
+		int current_uvw_batch_size = min(uwvLeftToProcess, config->uvw_batch_size);
+		
+		CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights+(ts_batch*config->vis_batch_size),
+						sizeof(VIS_PRECISION) * current_vis_batch_size, cudaMemcpyHostToDevice));
+		
+		CUDA_CHECK_RETURN(cudaMemcpy(device->d_visibilities, host->visibilities+(ts_batch*config->vis_batch_size), 
+						sizeof(VIS_PRECISION2) * current_vis_batch_size, cudaMemcpyHostToDevice));
 
-	printf("UPDATE >>> Gridding using %d blocks, %d threads, for %d visibilities...\n\n",
-			num_blocks, max_threads_per_block, config->num_visibilities);
-
-	// Execute gridding kernel
-	gridding<<<kernel_blocks, kernel_threads>>>(device->d_uv_grid, device->d_kernels, device->d_kernel_supports, 
-		device->d_vis_uvw_coords, device->d_visibilities, config->num_visibilities, config->oversampling,
-		config->grid_size, config->uv_scale, config->w_scale, config->num_kernels, config->enable_psf,
-		device->d_vis_weights);
-	cudaDeviceSynchronize();
-
+		CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords+(ts_batch*config->uvw_batch_size), 
+						sizeof(PRECISION3) * current_uvw_batch_size, cudaMemcpyHostToDevice));
+		cudaDeviceSynchronize();
+		
+		
+		int max_threads_per_block = min(config->gpu_max_threads_per_block, current_vis_batch_size);
+		int num_blocks = (int) ceil((double) current_vis_batch_size / max_threads_per_block);
+		dim3 kernel_blocks(num_blocks, 1, 1);
+		dim3 kernel_threads(max_threads_per_block, 1, 1);
+				
+		gridding<<<kernel_blocks, kernel_threads>>>(device->d_uv_grid, device->d_kernels, device->d_kernel_supports, 
+					device->d_vis_uvw_coords, device->d_visibilities, current_vis_batch_size, config->oversampling,
+					config->grid_size, config->uv_scale, config->w_scale, config->num_kernels, config->enable_psf,  
+					device->d_vis_weights, config->number_frequency_channels, config->num_baselines, config->frequency_hz_start, freq_inc);
+		cudaDeviceSynchronize();
+		
+		
+		visLeftToProcess -= config->vis_batch_size;
+		uwvLeftToProcess -= config->uvw_batch_size;
+	}
+	CUDA_CHECK_RETURN(cudaFree(device->d_vis_weights));
+		device->d_vis_weights = NULL;
+	CUDA_CHECK_RETURN(cudaFree(device->d_visibilities));
+		device->d_visibilities = NULL;
+	CUDA_CHECK_RETURN(cudaFree(device->d_vis_uvw_coords));
+		device->d_vis_uvw_coords = NULL;		
+	
 	printf("UPDATE >>> Gridding complete...\n\n");
 }
 
-
-void degridding_run(Config *config, Device_Mem_Handles *device)
+void degridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
 {
-	int max_threads_per_block = min(config->gpu_max_threads_per_block, config->num_visibilities);
-	int num_blocks = (int) ceil((double) config->num_visibilities / max_threads_per_block);
-	dim3 kernel_blocks(num_blocks, 1, 1);
-	dim3 kernel_threads(max_threads_per_block, 1, 1);
+	
+	int total_num_batches = (int)CEIL(double(config->num_timesteps) / double(config->timesteps_per_batch));
+		
+	int visLeftToProcess = config->num_host_visibilities;
+	int uwvLeftToProcess = config->num_host_uvws;
+	
+	PRECISION freq_inc = 0.0;
+	if(config->number_frequency_channels > 1)
+		freq_inc = PRECISION(config->frequency_bandwidth) / (config->number_frequency_channels-1); 
+	
+	for(int ts_batch=0;ts_batch<total_num_batches; ts_batch++)
+	{	//copy vis UVW here
+		//fill UVW and VIS
+		printf("Degriddding with batch number %d ...\n",ts_batch);
+		
+		int current_vis_batch_size = min(visLeftToProcess, config->vis_batch_size);
+		int current_uvw_batch_size = min(uwvLeftToProcess, config->uvw_batch_size);
+		
+		CUDA_CHECK_RETURN(cudaMemset(device->d_visibilities, 0, current_vis_batch_size * sizeof(VIS_PRECISION2)));
 
-	printf("UPDATE >>> Gridding using %d blocks, %d threads, for %d visibilities...\n\n",
-			num_blocks, max_threads_per_block, config->num_visibilities);
+		CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords+(ts_batch*config->uvw_batch_size), 
+						sizeof(PRECISION3) * current_uvw_batch_size, cudaMemcpyHostToDevice));
+		cudaDeviceSynchronize();
+		
+		
+		int max_threads_per_block = min(config->gpu_max_threads_per_block, current_vis_batch_size);
+		int num_blocks = (int) ceil((double) current_vis_batch_size / max_threads_per_block);
+		dim3 kernel_blocks(num_blocks, 1, 1);
+		dim3 kernel_threads(max_threads_per_block, 1, 1);
+		
 
-	// Execute gridding kernel
-	degridding<<<kernel_blocks, kernel_threads>>>(device->d_uv_grid, device->d_kernels, device->d_kernel_supports, 
-		device->d_vis_uvw_coords, device->d_visibilities, config->num_visibilities, config->oversampling,
-		config->grid_size, config->uv_scale, config->w_scale, config->num_kernels);
-	cudaDeviceSynchronize();
-
-	printf("UPDATE >>> Gridding complete...\n\n");
+		degridding<<<kernel_blocks, kernel_threads>>>(device->d_uv_grid, device->d_kernels, device->d_kernel_supports, 
+				device->d_vis_uvw_coords, device->d_visibilities, current_vis_batch_size, config->oversampling,
+				config->grid_size, config->uv_scale, config->w_scale, config->num_kernels, 
+				config->number_frequency_channels, config->num_baselines, config->frequency_hz_start, freq_inc);
+		cudaDeviceSynchronize();
+		
+	
+		CUDA_CHECK_RETURN(cudaMemcpy(host->visibilities+(ts_batch*config->vis_batch_size), device->d_visibilities, 
+						sizeof(VIS_PRECISION2) * current_vis_batch_size, cudaMemcpyDeviceToHost));
+		cudaDeviceSynchronize();
+	
+		visLeftToProcess -= config->vis_batch_size;
+		uwvLeftToProcess -= config->uvw_batch_size;
+	}
+	
+	
+	CUDA_CHECK_RETURN(cudaFree(device->d_visibilities));
+	device->d_visibilities = NULL;
+	CUDA_CHECK_RETURN(cudaFree(device->d_vis_uvw_coords));
+	device->d_vis_uvw_coords = NULL;		
+	
+	printf("UPDATE >>> Degridding complete...\n\n");
+	
 }
 
 void psf_normalization(Config *config, Device_Mem_Handles *device)
@@ -397,7 +434,7 @@ void psf_normalization(Config *config, Device_Mem_Handles *device)
 	config->psf_max_value = max_psf_found;
 }
 
-
+   
 __global__ void find_psf_max(PRECISION *max_psf, const PRECISION *psf, const int image_size)
 {
 	const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -512,12 +549,6 @@ void gridding_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem
 	cudaDeviceSynchronize();
 }
 
-void degridding_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
-{	CUDA_CHECK_RETURN(cudaMemcpy(host->visibilities, device->d_visibilities, 
-        config->num_visibilities * sizeof(VIS_PRECISION2), cudaMemcpyDeviceToHost));
-    cudaDeviceSynchronize();
-}
-
 void psf_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
 {
     int image_square = config->image_size * config->image_size;
@@ -590,14 +621,6 @@ void degridding_clean_up(Device_Mem_Handles *device)
 		CUDA_CHECK_RETURN(cudaFree(device->d_kernels));
 	device->d_kernels = NULL;
 
-	if(device->d_visibilities != NULL)
-		CUDA_CHECK_RETURN(cudaFree(device->d_visibilities));
-	device->d_visibilities = NULL;
-
-	if(device->d_vis_uvw_coords != NULL)
-		CUDA_CHECK_RETURN(cudaFree(device->d_vis_uvw_coords));
-	device->d_vis_uvw_coords = NULL;	
-
 	if(device->d_image != NULL)
 		CUDA_CHECK_RETURN(cudaFree(device->d_image));
 	device->d_image = NULL;
@@ -620,28 +643,43 @@ void degridding_clean_up(Device_Mem_Handles *device)
 __global__ void gridding(PRECISION2 *grid, const VIS_PRECISION2 *kernel, const int2 *supports,
 	const PRECISION3 *vis_uvw, const VIS_PRECISION2 *vis, const int num_vis, const int oversampling,
 	const int grid_size, const double uv_scale, const double w_scale, const int num_w_kernels, 
-	const bool psf, const VIS_PRECISION *vis_weights)
+	const bool psf, const VIS_PRECISION *vis_weights, const int num_channels, const int num_baselines, const PRECISION freq, const PRECISION freqInc)
 {
 	const unsigned int vis_index = blockIdx.x * blockDim.x + threadIdx.x;
 
 	if(vis_index >= num_vis)
 		return;
 
+	int timeStepOffset = vis_index/(num_channels*num_baselines);
+	int uvwIndex = (vis_index % num_baselines) + (timeStepOffset*num_baselines);
+	PRECISION3 local_uvw = vis_uvw[uvwIndex];
+	
+	//chnnelNum - visIndex 
+	int channelNumber = (vis_index / num_baselines) % num_channels; 
+	
+	PRECISION freqScale = (freq + channelNumber*freqInc) / PRECISION(SPEED_OF_LIGHT); //meters to wavelengths conversion
+	
+	local_uvw.x *= freqScale;
+	local_uvw.y *= freqScale;
+	local_uvw.z *= freqScale;
+	
+	//convert local_UVW meters to wavelengths based on frequency
+	
 	// Represents index of w-projection kernel in supports array
-	int w_kernel_index = (int) ROUND(SQRT(ABS(vis_uvw[vis_index].z * w_scale)));
+	int w_kernel_index = (int) ROUND(SQRT(ABS(local_uvw.z * w_scale)));
 	// Clamp to max possible kernel (prevent illegal memory exception)
 	w_kernel_index = max(min(w_kernel_index, num_w_kernels - 1), 0);
 
 	// Scale visibility uvw into grid coordinate space
 	const PRECISION2 grid_coord = MAKE_PRECISION2(
-		vis_uvw[vis_index].x * uv_scale,
-		vis_uvw[vis_index].y * uv_scale
+		local_uvw.x * uv_scale,
+		local_uvw.y * uv_scale
 	);
 
 	const int half_grid_size = grid_size / 2;
 	const int half_support = supports[w_kernel_index].x;
 
-	VIS_PRECISION conjugate = (vis_uvw[vis_index].z < 0.0) ? -1.0 : 1.0;
+	VIS_PRECISION conjugate = (local_uvw.z > 0.0) ? -1.0 : 1.0;
 
 	const PRECISION2 snapped_grid_coord = MAKE_PRECISION2(
 		ROUND(grid_coord.x * oversampling) / oversampling,
@@ -697,31 +735,45 @@ __global__ void gridding(PRECISION2 *grid, const VIS_PRECISION2 *kernel, const i
 //applys w-projection to the grid, snapping to nearest W plane and UV oversample
 __global__ void degridding(const PRECISION2 *grid, const VIS_PRECISION2 *kernel, const int2 *supports,
 	const PRECISION3 *vis_uvw, VIS_PRECISION2 *vis, const int num_vis, const int oversampling,
-	const int grid_size, const double uv_scale, const double w_scale, const int num_w_kernels)
+	const int grid_size, const double uv_scale, const double w_scale, const int num_w_kernels,
+	const int num_channels, const int num_baselines, const PRECISION freq, const PRECISION freqInc)
 {
 	const unsigned int vis_index = blockIdx.x * blockDim.x + threadIdx.x;
-
+	
 	if(vis_index >= num_vis)
 		return;
 
+	int timeStepOffset = vis_index/(num_channels*num_baselines);
+	int uvwIndex = (vis_index % num_baselines) + (timeStepOffset*num_baselines);
+	PRECISION3 local_uvw = vis_uvw[uvwIndex];
+	
+	//chnnelNum - visIndex 
+	int channelNumber = (vis_index / num_baselines) % num_channels; 
+	
+	PRECISION freqScale = (freq + channelNumber*freqInc) / PRECISION(SPEED_OF_LIGHT); //meters to wavelengths conversion
+	
+	local_uvw.x *= freqScale;
+	local_uvw.y *= freqScale;
+	local_uvw.z *= freqScale;
+
 	// Represents index of w-projection kernel in supports array
-	int w_kernel_index = (int) ROUND(SQRT(ABS(vis_uvw[vis_index].z * w_scale)));
+	int w_kernel_index = (int) ROUND(SQRT(ABS(local_uvw.z * w_scale)));
 	// Clamp to max possible kernel (prevent illegal memory exception)
 	w_kernel_index = max(min(w_kernel_index, num_w_kernels - 1), 0);
 
 	// Scale visibility uvw into grid coordinate space
 	const PRECISION2 grid_coord = MAKE_PRECISION2(
-		vis_uvw[vis_index].x * uv_scale,
-		vis_uvw[vis_index].y * uv_scale
+		local_uvw.x * uv_scale,
+		local_uvw.y * uv_scale
 	);
 
 	const int half_grid_size = grid_size / 2;
 	const int half_support = supports[w_kernel_index].x;
 
-	VIS_PRECISION conjugate = (vis_uvw[vis_index].z < 0.0) ? -1.0 : 1.0;
+	VIS_PRECISION conjugate = (local_uvw.z > 0.0) ? -1.0 : 1.0;
 	
 	//In stand alone degridder we had to flip the conjugate again is this correct???
-	conjugate *= (VIS_PRECISION)-1.0;
+	//conjugate *= (VIS_PRECISION)-1.0;
 
 	const PRECISION2 snapped_grid_coord = MAKE_PRECISION2(
 		ROUND(grid_coord.x * oversampling) / oversampling,
@@ -872,22 +924,6 @@ __global__ void execute_weight_map_normalization(PRECISION *image, const PRECISI
 	image[pixel_index] = (weight_map[pixel_index] > 0.0) ? image[pixel_index] / weight_map[pixel_index] : 0.0;
 }
 
-bool copy_visibilities_to_device(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
-{
-	printf("UPDATE >>> Copying visibilities to device, number of visibilities: %d...\n\n",config->num_visibilities);
-	CUDA_CHECK_RETURN(cudaMalloc(&(device->d_measured_vis), sizeof(VIS_PRECISION2) * config->num_visibilities));
-	CUDA_CHECK_RETURN(cudaMemcpy(device->d_measured_vis, host->measured_vis, sizeof(VIS_PRECISION2) * config->num_visibilities,
-		cudaMemcpyHostToDevice));
-	cudaDeviceSynchronize();	
-	
-	//Copy kernel supports over to GPU
-	CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->num_visibilities));
-	CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords, sizeof(PRECISION3) * config->num_visibilities,
-		cudaMemcpyHostToDevice));
-	cudaDeviceSynchronize();
-
-	return true;
-}
 
 __device__ VIS_PRECISION2 complex_mult(const VIS_PRECISION2 z1, const VIS_PRECISION2 z2)
 {

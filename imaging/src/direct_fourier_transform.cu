@@ -35,11 +35,9 @@ void dft_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *dev
 	// Set up - allocate device mem, transfer host mem to device
 	dft_set_up(config, host, device);
 
-	start_timer(&timings->dft);
-	start_timer(&timings->predict);
-	dft_run(config, device);
-	stop_timer(&timings->predict);
-	stop_timer(&timings->dft);
+	start_timer(&timings->predict, false);
+	dft_run(config, device, timings);
+	stop_timer(&timings->predict, false);
 
 	if(!config->retain_device_mem)
 	{
@@ -65,23 +63,23 @@ void dft_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *devi
 
 	// Predicted Vis
 	if(device->d_visibilities == NULL)
-	{
-		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->num_visibilities));
-		CUDA_CHECK_RETURN(cudaMemset(device->d_visibilities, 0, sizeof(VIS_PRECISION2) * config->num_visibilities));
+	{	printf("UPDATE >>> Allocating VISIBILITY BUFFER %d...\n\n", config->num_host_visibilities);
+		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->num_host_visibilities));
+		CUDA_CHECK_RETURN(cudaMemset(device->d_visibilities, 0, sizeof(VIS_PRECISION2) * config->num_host_visibilities));
 	    cudaDeviceSynchronize();
 	}
 
 	// Visibility UVW coordinates
 	if(device->d_vis_uvw_coords == NULL)
-	{
-		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->num_visibilities));
-	    CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords, sizeof(PRECISION3) * config->num_visibilities,
+	{	printf("UPDATE >>> Allocating UVW BUFFER %d...\n\n", config->num_host_uvws);
+		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->num_host_uvws));
+	    CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords, sizeof(PRECISION3) * config->num_host_uvws,
         	cudaMemcpyHostToDevice));
     	cudaDeviceSynchronize();
 	}
 }
 
-void dft_run(Config *config, Device_Mem_Handles *device)
+void dft_run(Config *config, Device_Mem_Handles *device, Timing *timings)
 {
 	int max_threads_per_block = min(config->gpu_max_threads_per_block, config->num_visibilities);
 	int num_blocks = (int) ceil((double) config->num_visibilities / max_threads_per_block);
@@ -91,15 +89,26 @@ void dft_run(Config *config, Device_Mem_Handles *device)
 	printf("UPDATE >>> Executing the Direct Fourier Transform algorithm...\n\n");
 	printf("UPDATE >>> DFT distributed over %d blocks, consisting of %d threads...\n\n", num_blocks, max_threads_per_block);
 
+
+	PRECISION freq_inc = 0.0;
+	if(config->number_frequency_channels > 1)
+		freq_inc = PRECISION(config->frequency_bandwidth) / (config->number_frequency_channels-1); 
+
+	start_timer(&timings->dft, false);
 	direct_fourier_transform<<<kernel_blocks, kernel_threads>>>
 	(
 		device->d_vis_uvw_coords,
 		device->d_visibilities,
 		config->num_visibilities,
 		device->d_sources,
-		config->num_sources
+		config->num_sources,
+		config->number_frequency_channels, 
+		config->num_baselines, 
+		config->frequency_hz_start, 
+		freq_inc
 	);
 	cudaDeviceSynchronize();
+	stop_timer(&timings->dft, false);
 
 	printf("UPDATE >>> Direct Fourier Transform complete...\n\n");
 }
@@ -129,15 +138,32 @@ void dft_clean_up(Device_Mem_Handles *device)
 
 //execute direct fourier transform on GPU
 __global__ void direct_fourier_transform(const PRECISION3 *vis_uvw, VIS_PRECISION2 *predicted_vis,
-	const int vis_count, const PRECISION3 *sources, const int source_count)
+	const int vis_count, const PRECISION3 *sources, const int source_count,
+	const int num_channels, const int num_baselines, const PRECISION freq, const PRECISION freqInc)
 {
 	const int vis_index = blockIdx.x * blockDim.x + threadIdx.x;
 
 	if(vis_index >= vis_count)
 		return;
 
+
+	int timeStepOffset = vis_index/(num_channels*num_baselines);
+	int uvwIndex = (vis_index % num_baselines) + (timeStepOffset*num_baselines);
+	PRECISION3 local_uvw = vis_uvw[uvwIndex];
+	
+	//chnnelNum - visIndex 
+	int channelNumber = (vis_index / num_baselines) % num_channels; 
+	
+	PRECISION freqScale = (freq + channelNumber*freqInc) / PRECISION(SPEED_OF_LIGHT); //meters to wavelengths conversion
+	
+	local_uvw.x *= freqScale;
+	local_uvw.y *= freqScale;
+	local_uvw.z *= freqScale;
+
+
+
 	const PRECISION two_PI = PI + PI;
-	const PRECISION3 vis = vis_uvw[vis_index];
+	
 	PRECISION3 src;
 	PRECISION2 theta_complex = MAKE_PRECISION2(0.0, 0.0);
 	PRECISION2 source_sum = MAKE_PRECISION2(0.0, 0.0);
@@ -160,7 +186,7 @@ __global__ void direct_fourier_transform(const PRECISION3 *vis_uvw, VIS_PRECISIO
 		#endif
 
 		PRECISION src_correction = src.z / image_correction;
-		PRECISION theta = (vis.x * src.x + vis.y * src.y + vis.z * w_correction) * two_PI;
+		PRECISION theta = (local_uvw.x * src.x + local_uvw.y * src.y + local_uvw.z * w_correction) * two_PI;
 		SINCOS(theta, &(theta_complex.y), &(theta_complex.x));
 		source_sum.x += theta_complex.x * src_correction;
 		source_sum.y += -theta_complex.y * src_correction;

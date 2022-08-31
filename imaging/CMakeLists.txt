@@ -21,6 +21,7 @@ cuda_add_executable(
 	src/controller.cu
 	src/common.cu
 	src/gridder.cu
+	src/msmfs_gridder.cu
 	src/gains.cu
 	src/deconvolution.cu
 	src/direct_fourier_transform.cu
@@ -32,10 +33,10 @@ cuda_add_executable(
 	src/complex.cu
 	src/weighting.cu
 	src/nifty.cu
+	src/msmfs_nifty.cu
 	src/fits_image_writer.cu
 	src/restorer.cu
 )
-set_target_properties(imaging PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 target_link_libraries(imaging m fyaml-0.5 cudart cusolver cufft pthread)
 

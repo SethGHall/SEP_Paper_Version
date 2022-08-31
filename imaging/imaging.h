@@ -40,6 +40,10 @@ extern "C" {
 
 int execute_imaging_pipeline(Config *config, Host_Mem_Handles *host_mem);
 
+int execute_imaging_pipeline_msmfs(Config *config, Host_Mem_Handles *host_mem);
+
+void save_taylor_term_planes(Config *config, PRECISION *host_image, int taylor_terms, int dim);
+
 void generate_psf(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timers);
 
 void save_psf_to_file(Config *config, PRECISION *image, const char *file_name, int start_x, int start_y, int range_x, int range_y);

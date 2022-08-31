@@ -53,9 +53,9 @@ extern "C" {
 	
 	void nifty_degridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timings);
 	
-	void nifty_gridding_run(Config *config, Device_Mem_Handles *device);
+	void nifty_gridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timings);
 	
-	void nifty_degridding_run(Config *config, Device_Mem_Handles *device);
+	void nifty_degridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timing);
 	
 	void nifty_psf_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timers);
 	
@@ -66,8 +66,6 @@ extern "C" {
 	void nifty_degridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 	
 	void nifty_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
-	
-	void nifty_visibility_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 	
 	void generate_gauss_legendre_conv_kernel(Host_Mem_Handles *host, Config *config);
 
@@ -99,7 +97,10 @@ extern "C" {
         const PRECISION uv_scale, // scaling factor for conversion of uv coords to grid coordinates (grid_size * cell_size)
         const PRECISION w_scale, // scaling factor for converting w coord to signed w grid index
         const PRECISION min_plane_w, // w coordinate of smallest w plane
-        const PRECISION metres_wavelength_scale, // for w coordinate
+		const int num_channels,
+		const int num_baselines,
+		const PRECISION metres_wavelength_scale, // for w coordinate	
+		const PRECISION freqInc,
         const bool generating_psf, // flag for enabling/disabling creation of PSF using same gridding code
         const bool perform_shift_fft, // flag to (equivalently) rearrange each grid so origin is at lower-left corner for FFT
         const bool solving // flag to enable degridding operations instead of gridding
@@ -161,6 +162,10 @@ extern "C" {
     double get_approx_legendre_root(int32_t i, int32_t n);
 
     double calculate_legendre_root(int32_t i, int32_t n, double accuracy, double *weight);
+	
+	uint32_t get_support_nifty(double epsilon, double upsampling);
+	
+	double get_beta_nifty(uint32_t support, double upsampling);
 
 #ifdef __cplusplus
 }

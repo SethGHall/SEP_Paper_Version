@@ -34,6 +34,7 @@ bool memory_region_ready[NUM_MEM_REGIONS];
 char pthread_filename[MAX_LEN_CHAR_BUFF]; // = "GLEAM_small_subset_intensity.bin";
 char pthread_data_path[MAX_LEN_CHAR_BUFF];
 
+
 int execute_controller(Config *config)
 {
 	printf("=========================================================================\n");
@@ -96,7 +97,8 @@ int execute_controller(Config *config)
 	if(!allocate_host_images(config, &host_mem))
 		return exit_and_host_clean("Unable to allocate host based memory for output images", &host_mem);
 
-	// HACK: required for pthread argument bypass
+	// ToDO - removing memory region management until we discover a better alternative;
+/*
 	snprintf(pthread_filename, MAX_LEN_CHAR_BUFF, "%s", config->visibility_source_file);
 	snprintf(pthread_data_path, MAX_LEN_CHAR_BUFF, "%s", config->data_input_path);
 
@@ -120,14 +122,11 @@ int execute_controller(Config *config)
     {   printf("ERROR >>> CANNOT RUN POSIX THREADS .... \n");
         return EXIT_FAILURE;
     }	
-	
-	
-	
-	
-
-
+*/
 	for(int imagingCycle=0; imagingCycle < NUM_IMAGING_ITERATIONS; ++imagingCycle)
 	{
+		//TAKING OUT MEMORY REGION TO GET MSMFS WORKING
+		/*
 		int region_num = imagingCycle%NUM_MEM_REGIONS;	
 		printf("PIPELINE >>> WAITING FOR %d TO BE READY... \n\n ",region_num); 
 		while(!memory_region_ready[region_num])
@@ -135,20 +134,27 @@ int execute_controller(Config *config)
             usleep(100);
         }
         printf("PIPELINE >>> MEMORY REGION %d READY... \n\n ",region_num); 
-		
-		host_mem.measured_vis = regions.memory_region[region_num];
+		*/
+		//ToDO removed memory region code until a better alternative is developed
+		//host_mem.measured_vis = regions.memory_region[region_num];
 
 		snprintf(config->imaging_output_id,MAX_LEN_CHAR_BUFF, "imaging_cycle_%d_",imagingCycle);
 		//bind memory region to Complex vis;
-		execute_imaging_pipeline(config, &host_mem);
+		if(config->mf_use)
+			execute_imaging_pipeline_msmfs(config,&host_mem);
+		else
+			execute_imaging_pipeline(config, &host_mem);
 		//pretend_imaging_pipeline(&host_mem,imagingCycle,config->num_visibilities);
 		//free Complex vis
 		printf("UPDATE >>> IMAGING CYCLE %d COMPLETE!!!!\n", imagingCycle);
-		memory_region_ready[region_num] = false;
+		//Todo: removed memory region code until a better alternative is developed
+		/*memory_region_ready[region_num] = false;
 		host_mem.measured_vis = NULL;
         usleep(SLEEP_PIPELINE_MICRO);
+		*/
 	}
-
+//removed memory region code until a better alternative is developed
+/*
 	printf("UPDATE >>> CLEANING UP MEMORY REGIONS ... \n\n");
 	for(int i=0;i<NUM_MEM_REGIONS;++i)
 	{	
@@ -156,7 +162,7 @@ int execute_controller(Config *config)
 			free(regions.memory_region[i]);
 		regions.memory_region[i] = NULL;
 	}
-	
+*/	
 	clean_up(&host_mem);
 	printf("UPDATE >>> Imaging Pipeline Complete...\n\n");
 	return EXIT_SUCCESS;
@@ -310,28 +316,89 @@ bool parse_config_attribute_bool(struct fy_document *fyd, const char *attrib_nam
 void update_calculated_configs(Config *config)
 {
 	// Calculated assuming we have values set from previous sweeps
-	config->num_visibilities = 0;
 	config->total_kernel_samples = 0;
 	config->psf_max_value = 0.0;
 	config->num_sources = 0;
 	config->enable_psf = false;
 	config->num_baselines = (config->num_recievers * (config->num_recievers- 1 )) / 2;
+
+	
+	config->num_host_visibilities = config->num_baselines * config->number_frequency_channels * config->num_timesteps;
+	config->num_visibilities = config->num_host_visibilities;
+	config->num_host_uvws = config->num_baselines * config->num_timesteps;
+	
+	config->vis_batch_size = config->num_baselines * config->number_frequency_channels  * config->timesteps_per_batch;
+	config->uvw_batch_size = config->num_baselines * config->timesteps_per_batch;
+	
+
 	config->visibility_scaled_weights_sum = 0.0;
 	config->gpu_max_threads_per_block = MAX_THREADS_PER_BLOCK;
 	config->gpu_max_threads_per_block_dimension = 32;
 	config->cell_size_rad = asin(2.0 * sin(0.5 * config->fov_deg*PI/(180.0)) / PRECISION(config->image_size));
-
+	
+	//update frequency configs for MSMFS.
+	if(config->number_frequency_channels > 1)
+		config->frequency_hz_increment = config->frequency_bandwidth / (double)(config->number_frequency_channels-1);
+	else
+		config->frequency_hz_increment = 0;
+	
+	if(config->num_ms_supports != DELTA)
+	{	config->ms_supports = (double*) calloc(config->num_ms_supports,sizeof(double));
+		double power_of_two = 1.0;
+		for(unsigned int i=0;i<config->num_ms_supports;i++)
+		{	
+			config->ms_supports[i] = power_of_two;
+			power_of_two *= 2.0;
+		}	
+	}
+	if(config->mf_use)
+	{	
+		if(config->mf_reference_hz <=0.0)
+			config->mf_reference_hz = (config->frequency_hz_start+config->frequency_hz_start+config->frequency_bandwidth)/2;
+	}
+	else
+		config->mf_reference_hz = 0.0f;
+	
+	
 	//calculate depending on what griddding operation is available.	
 #if SOLVER == NIFTY_GRIDDING
 		//Overide some w-projection and other value if NIFTY GRIDDING
-		config->nifty_config.beta = (config->nifty_config.beta * ((PRECISION)config->nifty_config.support)); // NOTE this 2.307 is only for when upsampling = 2
+		
+		
+		#if SINGLE_PRECISION
+			config->nifty_config.epsilon = 1E-5;     
+		#else
+			config->nifty_config.epsilon = 1E-13;
+		#endif
+		
+		printf("YO!!!! Nifty beta is calculated as %lf where support calculated as %d from upsampling %f\n",
+							config->nifty_config.beta, int(config->nifty_config.support), config->nifty_config.upsampling);
+		
+		config->nifty_config.support = get_support_nifty(config->nifty_config.epsilon, config->nifty_config.upsampling); // full support for semicircle gridding kernel
+
+	printf("YO!!!! Nifty beta is calculated as %lf where support calculated as %d from upsampling %f\n",
+							config->nifty_config.beta, int(config->nifty_config.support), config->nifty_config.upsampling);
+
+		config->nifty_config.beta = (PRECISION) (get_beta_nifty(config->nifty_config.support, config->nifty_config.upsampling) * (config->nifty_config.support)); // NOTE this 2.307 is only for when upsampling = 2
+		
+		printf("original beta is %lf \n",get_beta_nifty(config->nifty_config.support, config->nifty_config.upsampling));
+		
+		printf("YO!!!! Nifty beta is calculated as %lf where support calculated as %d from upsampling %f",
+							config->nifty_config.beta, int(config->nifty_config.support), config->nifty_config.upsampling);
+	
+		
+		
+		
+		//config->nifty_config.beta = (config->nifty_config.beta * ((PRECISION)config->nifty_config.support)); // NOTE this 2.307 is only for when upsampling = 2
+		
+		
 		config->grid_size = ceil(config->image_size * config->nifty_config.upsampling);   // upscaled one dimension size of grid for each w grid
 		
 		/****************************************************************************************
 		 * DO NOT MODIFY BELOW - DO NOT MODIFY BELOW - DO NOT MODIFY BELOW - DO NOT MODIFY BELOW 
 		 ***************************************************************************************/
-		config->min_abs_w *= config->frequency_hz / PRECISION(SPEED_OF_LIGHT); // scaled from meters to wavelengths
-		config->max_abs_w *= config->frequency_hz / PRECISION(SPEED_OF_LIGHT); // scaled from meters to wavelengths
+		config->min_abs_w *= config->frequency_hz_start / PRECISION(SPEED_OF_LIGHT); // scaled from meters to wavelengths
+	    config->max_abs_w *= (config->frequency_hz_start+config->frequency_bandwidth) / PRECISION(SPEED_OF_LIGHT); // scaled from meters to wavelengths
 		double x0 = -0.5 * PRECISION(config->image_size) * config->cell_size_rad;
 		double y0 = -0.5 * PRECISION(config->image_size) * config->cell_size_rad;
 		double nmin = sqrt(MAX(1.0 - x0*x0 - y0*y0, 0.0)) - 1.0;
@@ -350,6 +417,7 @@ void update_calculated_configs(Config *config)
 		 ***************************************************************************************/
 #else
 		config->grid_size = (int) ceil(config->image_size * config->grid_size_padding_scalar); 
+		config->max_abs_w *= (config->frequency_hz_start+config->frequency_bandwidth) / PRECISION(SPEED_OF_LIGHT); 
 		config->w_scale  = pow(config->num_kernels - 1, 2.0) / config->max_abs_w;
 # endif
 
@@ -357,7 +425,7 @@ void update_calculated_configs(Config *config)
 	if(config->grid_size % 2 != 0)
 		config->grid_size -= 1;
 
-	config->uv_scale = config->cell_size_rad * (PRECISION)config->grid_size * config->frequency_hz / SPEED_OF_LIGHT;
+	config->uv_scale = config->cell_size_rad * (PRECISION)config->grid_size;
 	
 	const char* prec_format = (SINGLE_PRECISION) ? "flt" : "dbl";
 	// file name convention: real/imag/supp minsupp maxsupp os maxw gridsize
@@ -373,6 +441,9 @@ void update_calculated_configs(Config *config)
 		config->data_input_path, config->min_half_support, config->max_half_support, config->oversampling,
 		config->max_abs_w, config->grid_size, prec_format);
 
+	printf("Number of visibilities to process: %d\n", config->num_host_visibilities);
+	printf("Number of UVWs to process: %d\n", config->num_host_uvws);
+	printf("Number of visibilities which will be batched: %d\n",config->vis_batch_size);
 #if SOLVER == NIFTY_GRIDDING
     printf("Min w plane: %f\n", config->nifty_config.min_plane_w);
     printf("Max w plane: %f\n", config->nifty_config.max_plane_w);
@@ -414,86 +485,59 @@ bool init_config_from_file(Config *config, char* config_file, bool required)
 		printf("UPDATE >>> Successfully located YAML based configuration file, parsing...\n\n");
 
 		if(!parse_config_attribute(fyd, "NUM_RECEIVERS", "%d", &(config->num_recievers), required) && required)
-			return false;
-		
+			return false;	
 		if(!parse_config_attribute(fyd, "IMAGE_SIZE", "%d", &(config->image_size), required) && required) 
 			return false;
-		
+		if(!parse_config_attribute(fyd, "PSF_SIZE", "%d", &(config->psf_size), required) && required) 
+			return false;
 		if(!parse_config_attribute(fyd, "FOV_DEG", "%lf", &(config->fov_deg), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "VIS_INTENSITY_FILE", "%s", config->visibility_source_file, required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "VIS_UVW_FILE", "%s", config->visibility_source_UVW_file, required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "MIN_HALF_SUPPORT", "%d", &(config->min_half_support), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "MAX_HALF_SUPPORT", "%d", &(config->max_half_support), required) && required)
 			return false;
-
 		if(!parse_config_attribute(fyd, "NUM_W_PLANES", "%d", &(config->num_kernels), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "OVERSAMPLING", "%d", &(config->oversampling), required) && required)
 			return false;
-
 		if(!parse_config_attribute(fyd, "MIN_ABS_W", "%lf", &(config->min_abs_w), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "MAX_ABS_W", "%lf", &(config->max_abs_w), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "INPUT_DATA_PATH", "%s", config->data_input_path, required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "OUTPUT_DATA_PATH", "%s", config->data_output_path, required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "NUM_MAJOR_CYCLES", "%d", &(config->num_major_cycles), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "GRID_PADDING_SCALAR", "%lf", &(config->grid_size_padding_scalar), required) && required)
 			return false;
-
 		if(!parse_config_attribute(fyd, "DEFAULT_GAINS_FILE", "%s", config->default_gains_file, required) && required)
 			return false;
-
 		if(!parse_config_attribute(fyd, "MAX_CALIBRATION_CYCLES", "%d", &(config->max_calibration_cycles), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "NUM_OF_CALIBRATION_CYCLES", "%d", &(config->number_cal_major_cycles), required) && required) 
 			return false;
-			
-		if(!parse_config_attribute(fyd, "FREQUENCY_HZ", "%lf", &(config->frequency_hz), required) && required) 
-			return false;
-
 		if(!parse_config_attribute(fyd, "NUM_MINOR_CYCLES_CALIBRATION", "%d", &(config->number_minor_cycles_cal), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "NUM_MINOR_CYCLES_IMAGING", "%d", &(config->number_minor_cycles_img), required) && required) 
-			return false;
-		
+			return false;		
 		if(!parse_config_attribute(fyd, "LOOP_GAIN", "%lf", &(config->loop_gain), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "WEAK_SOURCE_THRESHOLD_CALIBRATION", "%lf", &(config->weak_source_percent_gc), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "WEAK_SOURCE_THRESHOLD_IMAGING", "%lf", &(config->weak_source_percent_img), required) && required) 
-			return false;
-		
+			return false;	
 		if(!parse_config_attribute(fyd, "NOISE_FACTOR", "%lf", &(config->noise_factor), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "SEARCH_REGION_PERCENT", "%lf", &(config->search_region_percent), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "WEIGHTING_SCHEME", "%d", &(config->weighting), required) && required) 
 			return false;
-
 		if(!parse_config_attribute(fyd, "ROBUSTNESS", "%lf", &(config->robustness), required) && required) 
 			return false;
 
@@ -509,37 +553,53 @@ bool init_config_from_file(Config *config, char* config_file, bool required)
 		if(!parse_config_attribute(fyd, "NIFTY_NUM_W_GRIDS_TO_BATCH", "%d", &(config->nifty_config.num_w_grids_batched), required) && required) 
 			return false;
 
+		//New Frequencry modifiers for MSMFS
+		if(!parse_config_attribute(fyd, "NUM_TIMESTEPS", "%d", &(config->num_timesteps), required) && required) 
+			return false;
+		if(!parse_config_attribute(fyd, "FREQUENCY_START_HZ", "%lf", &(config->frequency_hz_start), required) && required) 
+			return false;
+		if(!parse_config_attribute(fyd, "FREQUENCY_BANDWIDTH", "%lf", &(config->frequency_bandwidth), required) && required) 
+			return false;
+		if(!parse_config_attribute(fyd, "FREQUENCY_NUM_CHANNELS", "%u", &(config->number_frequency_channels), required) && required) 
+			return false;
+		if(!parse_config_attribute(fyd, "TIMESTEP_BATCH_SIZE", "%u", &(config->timesteps_per_batch), required) && required) 
+			return false;
+		if(!parse_config_attribute(fyd, "MULTISCALE_CLEAN_SHAPE", "%d", &(config->ms_clean_shape), required) && required) 
+			return false;
+		if(!parse_config_attribute(fyd, "MULTISCALE_SCALE_BIAS", "%lf", &(config->ms_scale_bias), required) && required) 
+			return false;
+		if(!parse_config_attribute_bool(fyd, "MULTIFREQUENCY_USE", "%d", &(config->mf_use), required) && required)
+			return false;
+		if(!parse_config_attribute(fyd, "MULTIFREQUENCY_REFERENCE_HZ", "%lf", &(config->mf_reference_hz), required) && required) 
+			return false;
+		if(!parse_config_attribute(fyd, "MULTIFREQUENCY_SPECTRAL_INDEX_OVERALL", "%lf", &(config->mf_spectral_index_overall), required) && required) 
+			return false;
+		if(!parse_config_attribute(fyd, "MULTIFREQUENCY_NUM_MOMENTS", "%u", &(config->mf_num_moments), required) && required) 
+			return false;
+		if(!parse_config_attribute(fyd, "NUM_MULTISCALE_SUPPORTS", "%u", &(config->num_ms_supports), required) && required) 
+			return false;
+		
 		// Optional - requires bool hack (no bool string modifier in C)
 		if(!parse_config_attribute_bool(fyd, "RETAIN_DEVICE_MEM", "%d", &(config->retain_device_mem), required) && required)
 			return false;
-
 		if(!parse_config_attribute_bool(fyd, "RIGHT_ASCENSION", "%d", &(config->right_ascension), required) && required)
 			return false;
-
 		if(!parse_config_attribute_bool(fyd, "SAVE_DIRTY_IMAGES", "%d", &(config->save_dirty_image), required) && required)
 			return false;
-			
 		if(!parse_config_attribute_bool(fyd, "SAVE_RESIDUAL_IMAGES", "%d", &(config->save_residual_image), required) && required)
 			return false;
-
 		if(!parse_config_attribute_bool(fyd, "SAVE_EXTRACTED_SOURCES", "%d", &(config->save_extracted_sources), required) && required)
 			return false;
-
 		if(!parse_config_attribute_bool(fyd, "SAVE_PREDICTED_VIS", "%d", &(config->save_predicted_visibilities), required) && required)
 			return false;
-
 		if(!parse_config_attribute_bool(fyd, "SAVE_ESTIMATED_GAINS", "%d", &(config->save_estimated_gains), required) && required)
 			return false;
-
 		if(!parse_config_attribute_bool(fyd, "USE_DEFAULT_GAINS", "%d", &(config->use_default_gains), required) && required)
 			return false;
-
 		if(!parse_config_attribute_bool(fyd, "PERFORM_GAIN_CALIBRATION", "%d", &(config->perform_gain_calibration), required) && required)
 			return false;
-
 		if(!parse_config_attribute_bool(fyd, "LOAD_KERNELS_FROM_FILE", "%d", &(config->load_kernels_from_file), required) && required)
 			return false;
-
 		if(!parse_config_attribute_bool(fyd, "SAVE_KERNELS_TO_FILE", "%d", &(config->save_kernels_to_file), required) && required)
 			return false;
 	}
@@ -631,48 +691,61 @@ bool visibility_UVW_host_setup(Config *config, Host_Mem_Handles *host)
 		printf("ERROR >>> Unable to open visibility file %s...\n\n", buffer);
         return false; // unsuccessfully loaded data
     }
-	int num_vis = 0;
-    fread(&num_vis, sizeof(int), 1, vis_file);
-	printf("UPDATE >>> Reading in %d visibility UVW coordinates \n\n",num_vis);
-    config->num_visibilities = num_vis;
+	uint32_t num_vis = 0;
+    fread(&num_vis, sizeof(uint32_t), 1, vis_file);
 	
-	host->vis_uvw_coords = (VisCoord*) calloc(num_vis, sizeof(VisCoord));
+	
+	printf("UPDATE >>> Reading in %d visibility UVW coordinates are stored in file\n\n",num_vis);
+	
+	if(num_vis < config->num_host_uvws)
+	{	printf("ERROR >>> There are not enough UVWs given in file compared to the calculated configuration parameters %d != %d \n\n",
+				num_vis,config->num_host_uvws);
+		return false;
+	}
+	else if(num_vis > config->num_host_uvws)
+	{	printf("WARNING >>> %d UVWs if file, but will only process %d according to calculated configurations\n\n",
+				num_vis,config->num_host_uvws);
+	}
+
+	
+	host->vis_uvw_coords = (VisCoord*) calloc(config->num_host_uvws, sizeof(VisCoord));
 	if(host->vis_uvw_coords == NULL)
     {	printf("ERROR >> Unable to allocate memory for visibility information...\n\n");
         fclose(vis_file);
         return false;
     }
 	
-	int num_elements_read = fread(host->vis_uvw_coords, sizeof(VisCoord), num_vis, vis_file);
+	int num_elements_read = fread(host->vis_uvw_coords, sizeof(VisCoord), config->num_host_uvws, vis_file);
 	fclose(vis_file);
 	
-	if(num_elements_read != config->num_visibilities)
-	{	printf("ERROR >>> Reading UVW data %d did not match expected visiblity count %d.. \n", num_elements_read, config->num_visibilities);
+	if(num_elements_read != config->num_host_uvws)
+	{	printf("ERROR >>> Reading UVW data %d did not match expected visiblity count %d.. \n", num_elements_read, config->num_host_uvws);
 		return false;
 	}
 	
 	
 	PRECISION maxW_detected = 0.0;
-	PRECISION minW_detected = 0.0;
+	PRECISION minW_detected = (PRECISION)FLT_MAX;
 	
-	//NEED TO CONVERT UVW to single channel?
-	double meters_to_wavelengths = config->frequency_hz / SPEED_OF_LIGHT;
-	for(int vis_index = 0; vis_index < config->num_visibilities; ++vis_index)
-	{	if(config->right_ascension)  
+	for(int vis_index = 0; vis_index < config->num_host_uvws; ++vis_index)
+	{	
+		
+		if(vis_index >= config->num_baselines && vis_index <= config->num_baselines+10)
+			printf("%d U=%f, V=%f, W=%f..\n",vis_index,host->vis_uvw_coords[vis_index].u,host->vis_uvw_coords[vis_index].v,host->vis_uvw_coords[vis_index].w);
+		
+		if(config->right_ascension)  
         {
 			host->vis_uvw_coords[vis_index].u *= (PRECISION) -1.0;
 			host->vis_uvw_coords[vis_index].w *= (PRECISION) -1.0;
-		}
-		host->vis_uvw_coords[vis_index].u *= (PRECISION) meters_to_wavelengths;
-		host->vis_uvw_coords[vis_index].v *= (PRECISION) meters_to_wavelengths;	
-		host->vis_uvw_coords[vis_index].w *= (PRECISION) meters_to_wavelengths;	
-
-		if(host->vis_uvw_coords[vis_index].w > maxW_detected)
-			maxW_detected = host->vis_uvw_coords[vis_index].w;
-		if(host->vis_uvw_coords[vis_index].w < minW_detected)
-			minW_detected = host->vis_uvw_coords[vis_index].w;
+		}	
+		
+		if(ABS(host->vis_uvw_coords[vis_index].w) > maxW_detected)
+			maxW_detected = ABS(host->vis_uvw_coords[vis_index].w);
+		if(ABS(host->vis_uvw_coords[vis_index].w) < minW_detected)
+			minW_detected = ABS(host->vis_uvw_coords[vis_index].w);
+		
 	}
-	printf("UPDATE >>> MIN W DETECTED AS %f and MAX W DETECTED AS %f ..... \n\n",minW_detected,maxW_detected);
+	printf("UPDATE >>> MIN ABS-W DETECTED AS %f and MAX ABS-W DETECTED AS %f ..... \n\n",minW_detected,maxW_detected);
 	return true;
 }
 
@@ -692,15 +765,22 @@ bool visibility_intensity_host_setup(Config *config, Host_Mem_Handles *host)
     fread(&num_vis, sizeof(int), 1, vis_file);
     
 	//SHOULD CHECK IF ENOUGH ON UVW number??
-	if(config->num_visibilities != num_vis)
-	{	printf("ERROR >>> Reading Visbility data %d did not match expected visiblity UVW count %d.. \n",num_vis,config->num_visibilities);
+	if(config->num_host_visibilities < num_vis)
+	{	printf("ERROR >>> Reading Visbility data %d did not match expected visiblity UVW count %d.. \n",num_vis,config->num_host_visibilities);
 		return false;
 	}
-	printf("UPDATE >>> Need to Read %d visibility intensities from file \n",config->num_visibilities);
+	else if(num_vis > config->num_host_visibilities)
+	{	printf("WARNING >>> %d Visibility values in file, but will only process %d according to calculated configurations\n\n",
+				num_vis,config->num_host_visibilities);
+	}
+	
+	
+	
+	printf("UPDATE >>> Need to Read %d visibility intensities from file \n",config->num_host_visibilities);
     // Allocate memory for incoming visibilities
-    host->measured_vis = (VIS_PRECISION2*) calloc(num_vis, sizeof(VIS_PRECISION2));
-    host->visibilities = (VIS_PRECISION2*) calloc(num_vis, sizeof(VIS_PRECISION2));
-    host->vis_weights  = (VIS_PRECISION*)  calloc(num_vis, sizeof(VIS_PRECISION));
+    host->measured_vis = (VIS_PRECISION2*) calloc(config->num_host_visibilities, sizeof(VIS_PRECISION2));
+    host->visibilities = (VIS_PRECISION2*) calloc(config->num_host_visibilities, sizeof(VIS_PRECISION2));
+    host->vis_weights  = (VIS_PRECISION*)  calloc(config->num_host_visibilities, sizeof(VIS_PRECISION));
 
     if(host->measured_vis == NULL || host->visibilities  == NULL || host->vis_weights == NULL)
     {
@@ -711,19 +791,19 @@ bool visibility_intensity_host_setup(Config *config, Host_Mem_Handles *host)
 
 	// Used to load in single/double vis before convert to half precision
 	// TODO: Refactor this to load in 3 attributes instead of 2 (real, imaginary, and weight)
-	PRECISION2* temp_loader = (PRECISION2*) calloc(num_vis, sizeof(PRECISION2));
-    int num_elements_read = fread(temp_loader, sizeof(PRECISION2), num_vis, vis_file);
+	PRECISION2* temp_loader = (PRECISION2*) calloc(config->num_host_visibilities, sizeof(PRECISION2));
+    int num_elements_read = fread(temp_loader, sizeof(PRECISION2), config->num_host_visibilities, vis_file);
 
-    if(num_elements_read != config->num_visibilities)
-	{	printf("ERROR >>> Reading Visibility data %d did not match expected visiblity count %d.. \n",num_elements_read,config->num_visibilities);
+    if(num_elements_read != config->num_host_visibilities)
+	{	printf("ERROR >>> Reading Visibility data %d did not match expected visiblity count %d.. \n",num_elements_read,config->num_host_visibilities);
 		free(temp_loader);
 		temp_loader = NULL;
 		return false;
 	}
-    printf("UPDATE >>> Successfully loaded %d visibilities from file...\n\n", config->num_visibilities);
+    printf("UPDATE >>> Successfully loaded %d visibilities from file...\n\n", config->num_host_visibilities);
 
 	// Copy over from single/double to half/single precision
-	for(int i = 0; i < config->num_visibilities; i++)
+	for(int i = 0; i < config->num_host_visibilities; i++)
 	{
 		host->measured_vis[i] = MAKE_VIS_PRECISION2(((VIS_PRECISION) temp_loader[i].x), ((VIS_PRECISION) temp_loader[i].y));
 		host->vis_weights[i] = (PRECISION) 1.0; // TODO: Refactor this to be read from file
@@ -866,12 +946,12 @@ void save_predicted_visibilities(Config *config, Host_Mem_Handles *host, const i
     }
 
     printf("UPDATE >>> Writing predicted visibilities to file...\n\n");
-    fwrite(&(config->num_visibilities), sizeof(int), 1, f);
+    fwrite(&(config->num_host_uvws), sizeof(int), 1, f);
 
-    PRECISION meters_to_wavelengths = config->frequency_hz / SPEED_OF_LIGHT;
+    PRECISION meters_to_wavelengths = config->frequency_hz_start / SPEED_OF_LIGHT;
     PRECISION vis_weight = 1.0;
     // Record individual visibilities
-    for(int v = 0; v < config->num_visibilities; ++v)
+    for(int v = 0; v < config->num_host_uvws; ++v)
     {
         VisCoord current_uvw = host->vis_uvw_coords[v];
         VIS_PRECISION2 current_vis = host->visibilities[v];

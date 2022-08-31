@@ -52,7 +52,7 @@ int main(int argc, char **argv)
 		if(!init_config_from_file(&config, custom_config, false))
 			printf("ERROR >>> Unable to parse custom configuration file, resorting to default configuration...\n\n");
 
-		update_calculated_configs(&config);
+		 update_calculated_configs(&config);
 	}
 	else
 		printf("INFO >>> No default and custom config files supplied...\n\n");

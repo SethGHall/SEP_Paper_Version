@@ -54,11 +54,9 @@ extern "C" {
 	
 	void degridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 
-	void gridding_run(Config *config, Device_Mem_Handles *device);
+	void gridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 	
-	void degridding_run(Config *config, Device_Mem_Handles *device);
-	
-	void degridding_run(Config *config, Device_Mem_Handles *device);
+	void degridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 	
 	void psf_normalization(Config *config, Device_Mem_Handles *device);
 
@@ -69,8 +67,6 @@ extern "C" {
 	void convolution_correction_run(Config *config, Device_Mem_Handles *device);
 
 	void gridding_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
-	
-	void degridding_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 	
 	void psf_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 	
@@ -110,11 +106,12 @@ extern "C" {
 	__global__ void gridding(PRECISION2 *grid, const VIS_PRECISION2 *kernel, const int2 *supports,
 		const PRECISION3 *vis_uvw, const VIS_PRECISION2 *vis, const int num_vis, const int oversampling,
 		const int grid_size, const double uv_scale, const double w_scale, const int num_w_kernels,
-		bool psf, const VIS_PRECISION *vis_weights);
+		bool psf, const VIS_PRECISION *vis_weights, const int num_channels, const int num_baselines, const PRECISION freq, const PRECISION precInc);
 		
 	__global__ void degridding(const PRECISION2 *grid, const VIS_PRECISION2 *kernel, const int2 *supports,
 		const PRECISION3 *vis_uvw, VIS_PRECISION2 *vis, const int num_vis, const int oversampling,
-		const int grid_size, const double uv_scale, const double w_scale, const int num_w_kernels);
+		const int grid_size, const double uv_scale, const double w_scale, const int num_w_kernels,
+		const int num_channels, const int num_baselines, const PRECISION freq, const PRECISION precInc);
 
 
 	__global__ void find_psf_max(PRECISION *max_psf, const PRECISION *psf, const int image_size);
