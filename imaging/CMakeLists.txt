@@ -16,6 +16,8 @@ message(STATUS ">>> Location of C YAML parser lib: ${fyaml_loc}")
 add_library(fyaml-0.5 STATIC IMPORTED)
 set_target_properties(fyaml-0.5 PROPERTIES IMPORTED_LOCATION ${fyaml_loc})
 
+
+
 cuda_add_executable(
 	imaging ../main.cpp 
 	src/controller.cu
@@ -37,7 +39,7 @@ cuda_add_executable(
 	src/fits_image_writer.cu
 	src/restorer.cu
 )
-
+set_target_properties(imaging PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(imaging m fyaml-0.5 cudart cusolver cufft pthread)
 
 target_include_directories(imaging PUBLIC .)

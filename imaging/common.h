@@ -193,7 +193,7 @@ extern "C" {
  * Switches between 16-bit or 32-bit visibilities/wproj kernels
  */
 #ifndef ENABLE_16BIT_VISIBILITIES
-	#define ENABLE_16BIT_VISIBILITIES 1
+	#define ENABLE_16BIT_VISIBILITIES 0
 #endif
 
 /**

@@ -13,7 +13,7 @@ FREQUENCY_NUM_CHANNELS:            1
 NUM_TIMESTEPS:                     30 
 
 #  added new for batching
-TIMESTEP_BATCH_SIZE:                1
+TIMESTEP_BATCH_SIZE:                10
 
 # enum added new for multi-scale synthesis, 
 # default 0 for delta, 1 for tapered truncated parabolas, 2 for truncated gaussians
@@ -28,7 +28,6 @@ MULTIFREQUENCY_REFERENCE_HZ:           0.0  # default 0 if calculate reference v
 MULTIFREQUENCY_SPECTRAL_INDEX_OVERALL: 0.6  # default overall spectral index alpha0
 MULTIFREQUENCY_NUM_MOMENTS:            3    # number of Taylor terms to use when working with multifrequency visibilities
 
-h
 VIS_INTENSITY_FILE:                "gleam_small.vis"
 VIS_UVW_FILE:                      "gleam_small.uvw"
 

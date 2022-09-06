@@ -98,71 +98,16 @@ int execute_controller(Config *config)
 		return exit_and_host_clean("Unable to allocate host based memory for output images", &host_mem);
 
 	// ToDO - removing memory region management until we discover a better alternative;
-/*
-	snprintf(pthread_filename, MAX_LEN_CHAR_BUFF, "%s", config->visibility_source_file);
-	snprintf(pthread_data_path, MAX_LEN_CHAR_BUFF, "%s", config->data_input_path);
 
-	MemoryRegions regions;
-    regions.num_visibilities = config->num_visibilities;
-
-	size_t PAGE_SIZE = sysconf(_SC_PAGESIZE);
-	if(PAGE_SIZE <= 0)
-		PAGE_SIZE = 4096;
-
-	for(int i=0;i<NUM_MEM_REGIONS;++i)
-	{	
-		regions.memory_region[i] = (VIS_PRECISION2*) memalign(PAGE_SIZE,config->num_visibilities * sizeof(VIS_PRECISION2));
-		memory_region_ready[i] = false;
-	}
-
-	//SETUP POSIX THREADS TO READ VISIBLITY FILES
-	pthread_t vis_reader_thread;
-    int result_code = pthread_create(&vis_reader_thread, NULL, load_vis_into_memory_regions, &regions);
-	if(result_code != 0)
-    {   printf("ERROR >>> CANNOT RUN POSIX THREADS .... \n");
-        return EXIT_FAILURE;
-    }	
-*/
 	for(int imagingCycle=0; imagingCycle < NUM_IMAGING_ITERATIONS; ++imagingCycle)
 	{
-		//TAKING OUT MEMORY REGION TO GET MSMFS WORKING
-		/*
-		int region_num = imagingCycle%NUM_MEM_REGIONS;	
-		printf("PIPELINE >>> WAITING FOR %d TO BE READY... \n\n ",region_num); 
-		while(!memory_region_ready[region_num])
-        {
-            usleep(100);
-        }
-        printf("PIPELINE >>> MEMORY REGION %d READY... \n\n ",region_num); 
-		*/
-		//ToDO removed memory region code until a better alternative is developed
-		//host_mem.measured_vis = regions.memory_region[region_num];
-
 		snprintf(config->imaging_output_id,MAX_LEN_CHAR_BUFF, "imaging_cycle_%d_",imagingCycle);
 		//bind memory region to Complex vis;
-		if(config->mf_use)
-			execute_imaging_pipeline_msmfs(config,&host_mem);
-		else
-			execute_imaging_pipeline(config, &host_mem);
+		execute_imaging_pipeline(config, &host_mem);
 		//pretend_imaging_pipeline(&host_mem,imagingCycle,config->num_visibilities);
 		//free Complex vis
 		printf("UPDATE >>> IMAGING CYCLE %d COMPLETE!!!!\n", imagingCycle);
-		//Todo: removed memory region code until a better alternative is developed
-		/*memory_region_ready[region_num] = false;
-		host_mem.measured_vis = NULL;
-        usleep(SLEEP_PIPELINE_MICRO);
-		*/
 	}
-//removed memory region code until a better alternative is developed
-/*
-	printf("UPDATE >>> CLEANING UP MEMORY REGIONS ... \n\n");
-	for(int i=0;i<NUM_MEM_REGIONS;++i)
-	{	
-		if(regions.memory_region[i] != NULL)  
-			free(regions.memory_region[i]);
-		regions.memory_region[i] = NULL;
-	}
-*/	
 	clean_up(&host_mem);
 	printf("UPDATE >>> Imaging Pipeline Complete...\n\n");
 	return EXIT_SUCCESS;
@@ -179,12 +124,10 @@ void* load_vis_into_memory_regions(void *args)
         
         printf(">>>LOADER thread waiting for memory REGION %d...\n\n", region_num);
         while(memory_region_ready[region_num])
-        {
-            usleep(100);
+        {	usleep(100);
         }
         
         printf(">>>LOADER populating REGION %d...\n\n", region_num);
-         
 		char buffer[MAX_LEN_CHAR_BUFF * 2];
 		// snprintf(buffer, MAX_LEN_CHAR_BUFF, "%s%d_%s", pthread_data_path, i, pthread_filename);
 		snprintf(buffer,MAX_LEN_CHAR_BUFF * 2, "%s%s", pthread_data_path, pthread_filename);

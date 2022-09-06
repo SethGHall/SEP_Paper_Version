@@ -2,8 +2,8 @@
 # General 
 NUM_RECEIVERS:                     160   
 
-IMAGE_SIZE:	                   8192
-PSF_SIZE:                          8192
+IMAGE_SIZE:	                   4096
+PSF_SIZE:                          4096
 FOV_DEG:                           5.5 # approx
 
 FREQUENCY_START_HZ:                140000000
