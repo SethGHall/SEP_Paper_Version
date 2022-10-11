@@ -38,9 +38,9 @@ void deconvolution_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Ha
 	// Set up - allocate device mem, transfer host mem to device
 	deconvolution_set_up(config, host, device);
 
-	start_timer(&timings->deconvolution);
+	start_timer(&timings->deconvolution, false);
 	deconvolution_run(config, device);
-	stop_timer(&timings->deconvolution);
+	stop_timer(&timings->deconvolution, false);
 
 	if(!config->retain_device_mem)
 	{

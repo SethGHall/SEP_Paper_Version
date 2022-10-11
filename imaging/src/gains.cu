@@ -35,9 +35,9 @@ void gain_calibration_execute(Config *config, Host_Mem_Handles *host, Device_Mem
 	printf("UPDATE >>> Performing gain calibration...\n\n");
 	gains_set_up(config, host, device);
 
-	start_timer(&timings->gain_calibration);
+	start_timer(&timings->gain_calibration, false);
 	gain_calibration_run(config, device);
-	stop_timer(&timings->gain_calibration);
+	stop_timer(&timings->gain_calibration, false);
 
 	if(!config->retain_device_mem)
 	{
@@ -55,9 +55,9 @@ void gains_apply_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Hand
 	printf("UPDATE >>> Applying gains... \n\n");
 	gains_set_up(config, host, device);
 
-	start_timer(&timings->gain_subtraction);
+	start_timer(&timings->gain_subtraction, false);
 	gains_apply_run(config, device);
-	stop_timer(&timings->gain_subtraction);
+	stop_timer(&timings->gain_subtraction, false);
 
 	if(!config->retain_device_mem)
 	{

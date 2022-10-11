@@ -50,7 +50,7 @@ bool generate_w_projection_kernels(Config *config, Host_Mem_Handles *host)
     int min_support = config->min_half_support;
     int max_support = config->max_half_support;
     
-    size_t max_bytes_per_plane = 10 * 1024 * 1024; // automate this based on max support
+    size_t max_bytes_per_plane = 20 * 1024 * 1024; // automate this based on max support
     
     PRECISION max_uvw  = config->max_abs_w;
     PRECISION w_scale = POW(config->num_kernels - 1, 2.0) / max_uvw;

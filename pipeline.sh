@@ -12,6 +12,7 @@ MID_CONF=${CONFIG_DIR}/full_array_nominal.yaml
 GLEAM_SMALL_CONF=${CONFIG_DIR}/gleam_small.yaml
 GLEAM_MEDIUM_CONF=${CONFIG_DIR}/gleam_medium.yaml
 GLEAM_LARGE_CONF=${CONFIG_DIR}/gleam_large.yaml
+VLA_CONF=${CONFIG_DIR}/vla.yaml
 # DOCS_BUILD_DIR=${PROJECT_DIR}/build/imaging/docs/
 
 case ${COMMAND} in
@@ -76,6 +77,19 @@ case ${COMMAND} in
         cd ${PROJECT_DIR}
     ;;
 	
+
+    build_and_run_vla3)
+        cd ${PROJECT_DIR} 
+        rm -rf build
+        mkdir build
+        cd build && cmake ..
+        make -j8
+        imaging/./imaging ${VLA_CONF} ${VLA_CONF}
+        cd ${PROJECT_DIR}
+    ;;
+	
+
+
     build)
         make build
     ;;

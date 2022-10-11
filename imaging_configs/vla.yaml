@@ -1,19 +1,19 @@
 --- 
 # General 
-NUM_RECEIVERS:                     512   
+NUM_RECEIVERS:                     27   
 
-IMAGE_SIZE:			                   4096 
-PSF_SIZE:                          4096
-FOV_DEG:                           8.0 # approx
+IMAGE_SIZE:			                    1024
+PSF_SIZE:                          1024
+FOV_DEG:                           20.0
 
 # updated frequency changes
-FREQUENCY_START_HZ:                140000000
-FREQUENCY_BANDWIDTH:               3000000
-FREQUENCY_NUM_CHANNELS:            4 
-NUM_TIMESTEPS:                     60 
+FREQUENCY_START_HZ:                1E8
+FREQUENCY_BANDWIDTH:               4E7 #total bandwidth across all channels
+FREQUENCY_NUM_CHANNELS:            3 
+NUM_TIMESTEPS:                      500 
 
 #  added new for batching
-TIMESTEP_BATCH_SIZE:                20
+TIMESTEP_BATCH_SIZE:                100 #100 usually
 
 # enum added new for multi-scale synthesis, 
 # default 0 for delta, 1 for tapered truncated parabolas, 2 for truncated gaussians
@@ -29,10 +29,11 @@ MULTIFREQUENCY_SPECTRAL_INDEX_OVERALL: 0.6  # default overall spectral index alp
 MULTIFREQUENCY_NUM_MOMENTS:            3    # number of Taylor terms to use when working with multifrequency visibilities
 
 
-VIS_INTENSITY_FILE:                "gleam_large.vis"
-VIS_UVW_FILE:                      "gleam_large.uvw"
+VIS_INTENSITY_FILE:                "vla_d_3_SP.vis"
+VIS_UVW_FILE:                      "vla_d_3_SP.uvw"
 
-INPUT_DATA_PATH:                   "/home/seth/DATASETS/gleamlarge/new/"
+
+INPUT_DATA_PATH:                   "/home/seth/DATASETS/vla3/"
 OUTPUT_DATA_PATH:                  "/home/seth/test/"
 
 NUM_MAJOR_CYCLES:                  3
@@ -40,7 +41,7 @@ NUM_MAJOR_CYCLES:                  3
 RIGHT_ASCENSION:                   0
 
 # Natural = 0, Uniform = 1, Robust = 2
-WEIGHTING_SCHEME:                  0 
+WEIGHTING_SCHEME:                  0
 # Value should range from (-2.0 to +2.0)
 # -2.0 is close to uniform weighting
 # +2.0 is close to natural weighting
@@ -65,32 +66,31 @@ DEFAULT_GAINS_FILE:                "default_gains.csv"
 
 # Gridding
 GRID_PADDING_SCALAR:               1.2
-MIN_ABS_W:                         0.000057      #given in metres
-MAX_ABS_W:                         28221.732422  #given in metres
+MIN_ABS_W:                         0.000094  
+MAX_ABS_W:                         602.7269
 
 # W-Projection Gridding
 MIN_HALF_SUPPORT:                  4
-MAX_HALF_SUPPORT:                  157
-NUM_W_PLANES:                      985
-OVERSAMPLING:                      4 # must be power of 2
+MAX_HALF_SUPPORT:                  4
+NUM_W_PLANES:                      17
+OVERSAMPLING:                      16 # must be power of 2
 LOAD_KERNELS_FROM_FILE:            0
 SAVE_KERNELS_TO_FILE:              0
 
 # Nifty Gridding
 NIFTY_PERFORM_SHIFT_FFT:		       1
-NIFTY_UPSAMPLING:		               1.2
+NIFTY_UPSAMPLING:		               2.0
 NIFTY_SUPPORT:			               7
 NIFTY_BETA:			                   2.307
-NIFTY_NUM_W_GRIDS_TO_BATCH:	           1
-
+NIFTY_NUM_W_GRIDS_TO_BATCH:	           7
 
 # Deconvolution
-NUM_MINOR_CYCLES_CALIBRATION:      400
-NUM_MINOR_CYCLES_IMAGING:          100
+NUM_MINOR_CYCLES_CALIBRATION:      200
+NUM_MINOR_CYCLES_IMAGING:          50
 LOOP_GAIN:                         0.1
-WEAK_SOURCE_THRESHOLD_CALIBRATION: 0.005
+WEAK_SOURCE_THRESHOLD_CALIBRATION: 0.005    
 WEAK_SOURCE_THRESHOLD_IMAGING:     0.0002
 NOISE_FACTOR:                      1.2
-SEARCH_REGION_PERCENT:             90.0
+SEARCH_REGION_PERCENT:             100.0
 
 # Direct Fourier Transform

@@ -44,6 +44,8 @@
 #include "fft.h"
 #include "wprojection.h"
 #include "gridder.h"
+#include "msmfs_gridder.h"
+#include "msmfs_nifty.h"
 #include "deconvolution.h"
 #include "direct_fourier_transform.h"
 #include "memory.h"
@@ -68,11 +70,9 @@ extern "C" {
 	{
 		int num_visibilities;
 		VIS_PRECISION2 *memory_region[NUM_MEM_REGIONS];
-	} MemoryRegions;
+	} MemoryRegions; 
 
 	int execute_controller(Config *config);
-
-	void pretend_imaging_pipeline(Host_Mem_Handles *host_mem, int cycle, int num_vis);
 
 	void populate_memory_megion(VIS_PRECISION2 *region, int num_vis,  char* filename);
 	

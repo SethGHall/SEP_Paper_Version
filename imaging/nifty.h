@@ -43,19 +43,19 @@
 extern "C" {
 #endif
 
-    __device__ PRECISION conv_correction(PRECISION support, PRECISION k);
+    __device__ PRECISION conv_corr(const PRECISION support, const PRECISION k);
 
-    __device__ PRECISION exp_semicircle(PRECISION beta, PRECISION x);
+    __device__ PRECISION exp_semicircle(const PRECISION beta, const PRECISION x);
 
-    __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISION signage);
+    __device__ PRECISION2 phase_shift(const PRECISION w, const PRECISION l, const PRECISION m, const PRECISION signage);
 	
 	void nifty_gridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timings);
 	
 	void nifty_degridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timings);
 	
-	void nifty_gridding_run(Config *config, Device_Mem_Handles *device);
+	void nifty_gridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timings);
 	
-	void nifty_degridding_run(Config *config, Device_Mem_Handles *device);
+	void nifty_degridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timing);
 	
 	void nifty_psf_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timers);
 	
@@ -66,8 +66,6 @@ extern "C" {
 	void nifty_degridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 	
 	void nifty_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
-	
-	void nifty_visibility_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 	
 	void generate_gauss_legendre_conv_kernel(Host_Mem_Handles *host, Config *config);
 
@@ -85,11 +83,11 @@ extern "C" {
     );
 
     __global__ void nifty_gridding(
-        VIS_PRECISION2 *visibilities, // INPUT(gridding) OR OUTPUT(degridding): complex visibilities
-        const VIS_PRECISION *vis_weights, // INPUT: weight for each visibility
-        const PRECISION3 *uvw_coords, // INPUT: (u, v, w) coordinates for each visibility
+        VIS_PRECISION2* __restrict__ visibilities, // INPUT(gridding) OR OUTPUT(degridding): complex visibilities
+        const VIS_PRECISION* __restrict__ vis_weights, // INPUT: weight for each visibility
+        const PRECISION3* __restrict__ uvw_coords, // INPUT: (u, v, w) coordinates for each visibility
         const uint32_t num_visibilities, // total num visibilities
-        PRECISION2 *w_grid_stack, // OUTPUT: flat array containing 2D computed w grids, presumed initially clear
+        PRECISION2* __restrict__ w_grid_stack, // OUTPUT: flat array containing 2D computed w grids, presumed initially clear
         const uint32_t grid_size, // one dimensional size of w_plane (image_size * upsampling), assumed square
         const int32_t grid_start_w, // signed index of first w grid in current subset stack
         const uint32_t num_w_grids_subset, // number of w grids bound in current subset stack
@@ -99,19 +97,22 @@ extern "C" {
         const PRECISION uv_scale, // scaling factor for conversion of uv coords to grid coordinates (grid_size * cell_size)
         const PRECISION w_scale, // scaling factor for converting w coord to signed w grid index
         const PRECISION min_plane_w, // w coordinate of smallest w plane
-        const PRECISION metres_wavelength_scale, // for w coordinate
+		const int num_channels,
+		const int num_baselines,
+		const PRECISION metres_wavelength_scale, // for w coordinate	
+		const PRECISION freqInc,
         const bool generating_psf, // flag for enabling/disabling creation of PSF using same gridding code
         const bool perform_shift_fft, // flag to (equivalently) rearrange each grid so origin is at lower-left corner for FFT
         const bool solving // flag to enable degridding operations instead of gridding
     );
 
     __global__ void apply_w_screen_and_sum(
-        PRECISION *dirty_image, // INPUT & OUTPUT: real plane for accumulating phase corrected w layers across batches
+        PRECISION*  __restrict__ dirty_image, // INPUT & OUTPUT: real plane for accumulating phase corrected w layers across batches
         const uint32_t image_size, // one dimensional size of image plane (grid_size / sigma), assumed square
         const PRECISION pixel_size, // converts pixel index (x, y) to normalised image coordinate (l, m) where l, m between -0.5 and 0.5
-        const PRECISION2 *w_grid_stack, // INPUT: flat array containing 2D computed w layers (w layer = iFFT(w grid))
+        const PRECISION2* const __restrict__ w_grid_stack, // INPUT: flat array containing 2D computed w layers (w layer = iFFT(w grid))
         const uint32_t grid_size, // one dimensional size of w_plane (image_size * upsampling), assumed square
-        const int32_t grid_start_w, // signed index of first w grid in current subset stack
+        const int32_t grid_start_w, // index of first w grid in current subset stack
         const uint32_t num_w_grids_subset, // number of w grids bound in current subset stack
         const PRECISION inv_w_scale, // scaling factor for converting w coord to signed w grid index
         const PRECISION min_plane_w, // w coordinate of smallest w plane
@@ -161,6 +162,10 @@ extern "C" {
     double get_approx_legendre_root(int32_t i, int32_t n);
 
     double calculate_legendre_root(int32_t i, int32_t n, double accuracy, double *weight);
+	
+	uint32_t get_support_nifty(double epsilon, double upsampling);
+	
+	double get_beta_nifty(uint32_t support, double upsampling);
 
 #ifdef __cplusplus
 }

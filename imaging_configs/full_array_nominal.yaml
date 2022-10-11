@@ -2,20 +2,42 @@
 # General
 NUM_RECEIVERS: 197
 
-IMAGE_SIZE: 10240
+IMAGE_SIZE: 4096
+PSF_SIZE:   4096
 FOV_DEG:             3.0 # approx
 
-FREQUENCY_HZ: 299792458.0
+# updated frequency changes
+FREQUENCY_START_HZ:                1270000000
+FREQUENCY_BANDWIDTH:               178200000
+FREQUENCY_NUM_CHANNELS:            100  
+NUM_TIMESTEPS:                     160 
+
+#  added new for batching
+TIMESTEP_BATCH_SIZE:                20 
+
+# enum added new for multi-scale synthesis, 
+# default 0 for delta, 1 for tapered truncated parabolas, 2 for truncated gaussians
+MULTISCALE_CLEAN_SHAPE:             0
+# lower scale bias will favour smaller scales during cleaning
+MULTISCALE_SCALE_BIAS:              0.6 
+NUM_MULTISCALE_SUPPORTS:            4    #full supports for scaled cleaning shapes if not delta, assume first being 1 and powers of 2 eg 4 = [1.0, 2.0, 4.0, 8.0] 
+
+#Added new for multi-frequency synthesis
+MULTIFREQUENCY_USE:                    0    # default to use multifrequency scaling in gridder
+MULTIFREQUENCY_REFERENCE_HZ:           0.0  # default 0 if calculate reference vref = mean of lowest and highest frequency 
+MULTIFREQUENCY_SPECTRAL_INDEX_OVERALL: 0.6  # default overall spectral index alpha0
+MULTIFREQUENCY_NUM_MOMENTS:            3    # number of Taylor terms to use when working with multifrequency visibilities
 
 VIS_INTENSITY_FILE: "full_mid_array.vis"
-VIS_UVW_FILE: "full_mid_array.uvw"
+VIS_UVW_FILE:       "full_mid_array.uvw"
 
-INPUT_DATA_PATH: "/home/seth/Desktop/BIG_DATASETS/input/"
-OUTPUT_DATA_PATH: "/home/seth/Desktop/BIG_DATASETS/output/"
 
-NUM_MAJOR_CYCLES: 4
+INPUT_DATA_PATH:      "/home/seth/DATASETS/nominal/new/"
+OUTPUT_DATA_PATH:     "/home/seth/test/"
 
-RIGHT_ASCENSION: 1
+NUM_MAJOR_CYCLES: 3
+
+RIGHT_ASCENSION: 0
 
 # Natural = 0, Uniform = 1, Robust = 2
 WEIGHTING_SCHEME:                  0
@@ -43,8 +65,8 @@ DEFAULT_GAINS_FILE: "default_gains.csv"
 
 # Gridding
 GRID_PADDING_SCALAR:               1.2
-MIN_ABS_W:                         0.0 
-MAX_ABS_W:                         515342.0
+MIN_ABS_W:                         0.000031
+MAX_ABS_W:                         106680.992188
 
 # W-Projection Gridding
 MIN_HALF_SUPPORT: 4
@@ -63,11 +85,11 @@ NIFTY_NUM_W_GRIDS_TO_BATCH: 1
 
 # Deconvolution
 NUM_MINOR_CYCLES_CALIBRATION: 1000
-NUM_MINOR_CYCLES_IMAGING: 1000
+NUM_MINOR_CYCLES_IMAGING: 400
 LOOP_GAIN: 0.1
 WEAK_SOURCE_THRESHOLD_CALIBRATION: 0.005
 WEAK_SOURCE_THRESHOLD_IMAGING: 0.0002
 NOISE_FACTOR: 1.2
-SEARCH_REGION_PERCENT:             100.0
+SEARCH_REGION_PERCENT:             70.0
 
 # Direct Fourier Transform

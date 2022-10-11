@@ -32,18 +32,88 @@
 #include "../controller.h"
 #include "../restorer.h"
 
+/*
+	Temporarily executing msmfs solver - This is just a placeholder and cannot major cycle nor clean at this stage
+*/
+int execute_imaging_pipeline_msmfs(Config *config, Host_Mem_Handles *host_mem)
+{
+	cudaDeviceReset();
+	
+	Device_Mem_Handles device_mem;
+	init_gpu_mem(&device_mem);
+	
+	Timing timers;
+	init_timers(&timers);
+	
+	//Generate  PSFs for MSMFS cleaning - added later 
+	
+#if SOLVER == NIFTY_GRIDDING
+	int  taylor = (2 * config->mf_num_moments) - 1;
+	config->enable_psf = true;
+	msmfs_nifty_gridding_execute(config, host_mem, &device_mem, &timers);
+	host_mem->h_psf = (PRECISION*) calloc(taylor*config->psf_size*config->psf_size, sizeof(PRECISION));
+	pull_msmfs_image_cube(config, host_mem, &device_mem);
+	save_taylor_term_planes(config, host_mem->h_psf, taylor, config->psf_size);
+	msmfs_nifty_clean_up(&device_mem);
+	
+	config->enable_psf = false;
+	taylor = config->mf_num_moments;
+	gains_apply_execute(config, host_mem, &device_mem, &timers);
+	msmfs_nifty_gridding_execute(config, host_mem, &device_mem, &timers);
+	host_mem->dirty_image = (PRECISION*) calloc(taylor*config->image_size*config->image_size, sizeof(PRECISION));
+	pull_msmfs_image_cube(config, host_mem, &device_mem);
+	save_taylor_term_planes(config, host_mem->dirty_image, taylor, config->image_size);
+	msmfs_nifty_clean_up(&device_mem);
+#else 
+	int  taylor = (2 * config->mf_num_moments) - 1;
+	config->enable_psf = true;
+	gridding_execute_msmfs(config,host_mem,&device_mem, &timers);
+	host_mem->h_psf = (PRECISION*) calloc(taylor*config->psf_size*config->psf_size, sizeof(PRECISION));
+	pull_msmfs_image_cube(config, host_mem, &device_mem);
+	save_taylor_term_planes(config, host_mem->h_psf, taylor, config->psf_size);
+	msmfs_gridding_clean_up(&device_mem);
+	config->enable_psf = false;
+	
+	//Generate  Dirty Images for MSMFS cleaning - added later 
+	taylor = config->mf_num_moments;
+	gains_apply_execute(config, host_mem, &device_mem, &timers);
+	gridding_execute_msmfs(config,host_mem,&device_mem, &timers);
+	host_mem->dirty_image = (PRECISION*) calloc(taylor*config->image_size*config->image_size, sizeof(PRECISION));
+	pull_msmfs_image_cube(config, host_mem, &device_mem);
+	save_taylor_term_planes(config, host_mem->dirty_image, taylor, config->image_size);
+	msmfs_gridding_clean_up(&device_mem);
+#endif	
+	
+	
+	clean_up_device(&device_mem); 
+	
+	return EXIT_SUCCESS;
+}
+
+
+void save_taylor_term_planes(Config *config, PRECISION *host_image, int taylor_terms, int dim)
+{
+	
+	char buffer[MAX_LEN_CHAR_BUFF * 4];
+	
+	for(int t=0;t<taylor_terms;t++)
+	{
+		snprintf(buffer, MAX_LEN_CHAR_BUFF*4, "%s%s_Plane_%d_psf.bin", config->data_output_path,(config->enable_psf ? "psf" : "dirtyimage"), t);
+		printf("UPDATE >>> Attempting to save image to %s... \n\n", buffer);
+		FILE *f = fopen(buffer, "wb");
+	
+		int saved = fwrite(host_image+t*dim*dim, sizeof(PRECISION), dim * dim, f);
+		printf(">>> GRID DIMS IS : %d\n", dim);
+		printf(">>> SAVED TO FILE: %d\n", saved);
+		fclose(f);
+	}
+}
+
+
 int execute_imaging_pipeline(Config *config, Host_Mem_Handles *host_mem)
 {	
 	// Destroy any hanging device mem allocations
 	cudaDeviceReset();
-
-	int driver_version=0;
-	CUDA_CHECK_RETURN(cudaDriverGetVersion(&driver_version));
-	
-	int runtime_version=0;
-	CUDA_CHECK_RETURN(cudaRuntimeGetVersion(&runtime_version));
-
-	printf("UPDATE >>> DRIVER VERSION %d and RUNTIME VERSION %d ...\n\n", driver_version, runtime_version);
 
 	Timing timers;
 	init_timers(&timers);
@@ -52,8 +122,13 @@ int execute_imaging_pipeline(Config *config, Host_Mem_Handles *host_mem)
 	init_gpu_mem(&device_mem);
 
 	// IMPLEMENTING: Perform visibility weighting here (required for PSF and gridding)
-	visibility_weighting_execute(config, host_mem, &device_mem); 
-
+	
+	//ToDo - taken out weight  scaling until we develop a better MSMFS solution
+	
+	//visibility_weighting_execute(config, host_mem, &device_mem); 
+      
+	  printf("AAAAAAAAAAARGGGGGH THIS IS A HACK... NEED TO DO THE VIS WEIGHTING PROPERLY \n\n");
+	  config->visibility_scaled_weights_sum = config->number_frequency_channels; //config->num_visibilities;
 	// Create PSF HERE will depend what solver we are using
 	generate_psf(config, host_mem, &device_mem, &timers);
 	//extract_pipeline_image(host_mem->h_psf, device_mem.d_psf, config->image_size);
@@ -69,10 +144,8 @@ int execute_imaging_pipeline(Config *config, Host_Mem_Handles *host_mem)
 			config->perform_gain_calibration = false;
 			config->num_sources = 0;
 			//reset host and device mem predicted
-			if(device_mem.d_visibilities != NULL)
-				CUDA_CHECK_RETURN(cudaMemset(device_mem.d_visibilities, 0, config->num_visibilities * sizeof(VIS_PRECISION2)));
 			if(host_mem->visibilities != NULL)
-				memset(host_mem->visibilities,0,config->num_visibilities * sizeof(VIS_PRECISION2));
+				memset(host_mem->visibilities,0,config->num_host_visibilities * sizeof(VIS_PRECISION2));
 		}
 		if(cycle < config->number_cal_major_cycles)
 			printf("UPDATE >>> Executing Calibration: Major cycle number %d...\n\n", cycle);
@@ -102,7 +175,7 @@ int execute_imaging_pipeline(Config *config, Host_Mem_Handles *host_mem)
 		if (cycle == config->num_major_cycles-1)
 		{
 			printf("AG UPDATE >>> Performing image restoration...\n\n");
-			do_image_restoration(config, host_mem, &device_mem);
+			//do_image_restoration(config, host_mem, &device_mem);
 		}
 		else
 		{
@@ -140,11 +213,6 @@ int execute_imaging_pipeline(Config *config, Host_Mem_Handles *host_mem)
 				degridding_execute(config,host_mem,&device_mem,&timers);
 			#endif
 
-			if(config->save_predicted_visibilities)
-			{
-				extract_predicted_visibilities(config, host_mem, &device_mem);
-				save_predicted_visibilities(config, host_mem, cycle);
-			}
 			// Gain Calibration
 			if(config->perform_gain_calibration)
 			{	
@@ -278,51 +346,56 @@ void clean_up_device(Device_Mem_Handles *device)
 
 void init_timers(Timing *timers)
 {
-	timers->gridder       		= (Timer) {.start = 0, .end = 0};
-	timers->fft           		= (Timer) {.start = 0, .end = 0};
-	timers->correction    		= (Timer) {.start = 0, .end = 0};
-	timers->deconvolution 		= (Timer) {.start = 0, .end = 0};
-	timers->dft           		= (Timer) {.start = 0, .end = 0};
-	timers->gain_subtraction  	= (Timer) {.start = 0, .end = 0};
-	timers->gain_calibration  	= (Timer) {.start = 0, .end = 0};
-}
+	init_timer(&(timers->gridder));
+	init_timer(&(timers->nifty_solve_stack));
+	init_timer(&(timers->ifft));
+	init_timer(&(timers->solve_correction));
 
+	init_timer(&(timers->degridder));
+	init_timer(&(timers->nifty_predict_stack));
+	init_timer(&(timers->fft));
+	init_timer(&(timers->predict_correction));
+
+	init_timer(&(timers->deconvolution));
+
+	init_timer(&(timers->dft));
+
+	init_timer(&(timers->gain_subtraction));
+	init_timer(&(timers->gain_calibration));
+
+	init_timer(&(timers->solver));
+	init_timer(&(timers->solver_data_ingress));
+
+	init_timer(&(timers->predict));
+	init_timer(&(timers->predict_data_ingress));
+	init_timer(&(timers->predict_data_egress));
+}
 
 void report_timings(Timing *timers)
 {
-	float elapsed = 0.0f;
-	
-	
-	
-	cudaEventElapsedTime(&elapsed, timers->gridder.start, timers->gridder.end);
-	printf("TIMING >>> Gridding elapsed time: %f milliseconds\n\n", elapsed);
+	printf(">>> BULLSIT...\n");
+	print_timer(&(timers->gain_subtraction), "Gain Subtraction");
+	print_timer(&(timers->gain_calibration), "Gain Calibration");
+	print_timer(&(timers->deconvolution), "Deconvolution");
+	print_timer(&(timers->dft), "Direct Fourier Transform");
 
-	cudaEventElapsedTime(&elapsed, timers->fft.start, timers->fft.end);
-	printf("TIMING >>> FFT elapsed time: %f milliseconds\n\n", elapsed);
+	printf(">>> SOLVER TIMING...\n");
+	print_timer(&(timers->solver), "Solver");
+	print_timer(&(timers->solver_data_ingress), "Solver Data Ingress");
+	print_timer(&(timers->gridder), "Gridding");
+	print_timer(&(timers->nifty_solve_stack), "NIFTy Solver Stacking");
+	print_timer(&(timers->ifft), "FFT (inverse)");
+	print_timer(&(timers->solve_correction), "Solver Convolution Correction");
 
-	cudaEventElapsedTime(&elapsed, timers->correction.start, timers->correction.end);
-	printf("TIMING >>> Convolution Correction elapsed time: %f milliseconds\n\n", elapsed);
+	printf(">>> PREDICT TIMING...\n");
+	print_timer(&(timers->predict), "Predict");
+	print_timer(&(timers->predict_data_ingress), "Predict Data Ingress");
+	print_timer(&(timers->degridder), "Degridding");
+	print_timer(&(timers->nifty_predict_stack), "NIFTy Predict Stacking");
+	print_timer(&(timers->fft), "FFT");
+	print_timer(&(timers->predict_correction), "Predict Convolution Correction");
+	print_timer(&(timers->predict_data_egress), "Predict Data Egress");
 
-	cudaEventElapsedTime(&elapsed, timers->deconvolution.start, timers->deconvolution.end);
-	printf("TIMING >>> Deconvolution elapsed time: %f milliseconds\n\n", elapsed);
-
-	cudaEventElapsedTime(&elapsed, timers->dft.start, timers->dft.end);
-	printf("TIMING >>> Direct Fourier Transform elapsed time: %f milliseconds\n\n", elapsed);
-
-	cudaEventElapsedTime(&elapsed, timers->gain_subtraction.start, timers->gain_subtraction.end);
-	printf("TIMING >>> Gain Subtraction elapsed time: %f milliseconds\n\n", elapsed);
-
-	cudaEventElapsedTime(&elapsed, timers->gain_calibration.start, timers->gain_calibration.end);
-	printf("TIMING >>> Gain Calibration elapsed time: %f milliseconds\n\n", elapsed);
-	
-	printf("TIMING >>>>> PREDICT-SOLVER CYCLES <<<<<<<<\n\n");
-	
-	cudaEventElapsedTime(&elapsed, timers->solver.start, timers->solver.end);
-	printf("TIMING >>> Total SOLVER elapsed time: %f milliseconds\n\n", elapsed);
-	
-	cudaEventElapsedTime(&elapsed, timers->predict.start, timers->predict.end);
-	printf("TIMING >>> Total PREDICT elapsed time: %f milliseconds\n\n", elapsed);
-	
 	#if SOLVER == NIFTY_GRIDDING
 		printf("UPDATE: Where solver=nifty+fft+cc \n");
 	#else
@@ -336,7 +409,6 @@ void report_timings(Timing *timers)
 	#else
 		printf("UPDATE: Where predict=dft \n");
 	#endif
-	
 }
 
 void extract_pipeline_image(PRECISION *host_image, PRECISION *device_image, const int grid_size)
@@ -354,7 +426,7 @@ void extract_predicted_visibilities(Config *config, Host_Mem_Handles *host, Devi
 	if(device->d_visibilities != NULL)
 	{
 	    CUDA_CHECK_RETURN(cudaMemcpy(host->visibilities, device->d_visibilities, 
-        	config->num_visibilities * sizeof(VIS_PRECISION2), cudaMemcpyDeviceToHost));
+        	config->num_host_visibilities * sizeof(VIS_PRECISION2), cudaMemcpyDeviceToHost));
 			
 		
 		

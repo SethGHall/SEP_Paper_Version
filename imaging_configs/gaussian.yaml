@@ -2,20 +2,42 @@
 # General 
 NUM_RECEIVERS:                     160   
 
-IMAGE_SIZE:	            2048
+IMAGE_SIZE:	                       4096
+PSF_SIZE:                          4096
 FOV_DEG:                           5.5 # approx
 
-FREQUENCY_HZ:                      299792458.0
+FREQUENCY_START_HZ:                140000000
+FREQUENCY_BANDWIDTH:               19800000
+FREQUENCY_NUM_CHANNELS:            100 
+NUM_TIMESTEPS:                     240 
+
+#  added new for batching
+TIMESTEP_BATCH_SIZE:                60
+
+# enum added new for multi-scale synthesis, 
+# default 0 for delta, 1 for tapered truncated parabolas, 2 for truncated gaussians
+MULTISCALE_CLEAN_SHAPE:             0
+# lower scale bias will favour smaller scales during cleaning
+MULTISCALE_SCALE_BIAS:              0.6 
+NUM_MULTISCALE_SUPPORTS:            4    #full supports for scaled cleaning shapes if not delta, assume first being 1 and powers of 2 eg 4 = [1.0, 2.0, 4.0, 8.0] 
+
+#Added new for multi-frequency synthesis
+MULTIFREQUENCY_USE:                    1    # default to use multifrequency scaling in gridder
+MULTIFREQUENCY_REFERENCE_HZ:           0.0  # default 0 if calculate reference vref = mean of lowest and highest frequency 
+MULTIFREQUENCY_SPECTRAL_INDEX_OVERALL: 0.6  # default overall spectral index alpha0
+MULTIFREQUENCY_NUM_MOMENTS:            3    # number of Taylor terms to use when working with multifrequency visibilities
+
+
 
 VIS_INTENSITY_FILE:                "gaussian_beam.vis"
 VIS_UVW_FILE:                      "gaussian_beam.uvw"
 
-INPUT_DATA_PATH:                   "/home/seth/DATASETS/gaussianbeam/old/"
+INPUT_DATA_PATH:                   "/home/seth/DATASETS/gaussianbeam/new/"
 OUTPUT_DATA_PATH:                  "/home/seth/test/"
 
-NUM_MAJOR_CYCLES:                  2
+NUM_MAJOR_CYCLES:                  3
 
-RIGHT_ASCENSION:                   1
+RIGHT_ASCENSION:                   0
 
 # Natural = 0, Uniform = 1, Robust = 2
 WEIGHTING_SCHEME:                  0
@@ -28,7 +50,7 @@ ROBUSTNESS:                        0.0
 SAVE_DIRTY_IMAGES:                 1
 SAVE_RESIDUAL_IMAGES:              0
 SAVE_EXTRACTED_SOURCES:            0
-SAVE_PREDICTED_VIS:                0
+SAVE_PREDICTED_VIS:                0  
 SAVE_ESTIMATED_GAINS:              0
 
 # GPU Specific
@@ -43,23 +65,23 @@ USE_DEFAULT_GAINS:                 1
 DEFAULT_GAINS_FILE:                "default_gains.csv"
 
 # Gridding
-GRID_PADDING_SCALAR:               1.2
-MIN_ABS_W:                         0.0 
-MAX_ABS_W:                         15618.61809359
+GRID_PADDING_SCALAR:               2.0
+MIN_ABS_W:                         0.000040         # Given in Metres!
+MAX_ABS_W:                         29301.275391     # Given in Metres!
 
 # W-Projection Gridding
 MIN_HALF_SUPPORT:                  4
 MAX_HALF_SUPPORT:                  94
 NUM_W_PLANES:                      786
-OVERSAMPLING:                      4 # must be power of 2
+OVERSAMPLING:                      16 # must be power of 2
 LOAD_KERNELS_FROM_FILE:            1
 SAVE_KERNELS_TO_FILE:              1
 
 # Nifty Gridding
 NIFTY_PERFORM_SHIFT_FFT:	       1
-NIFTY_UPSAMPLING:		       1.2
-NIFTY_SUPPORT:			       7
-NIFTY_BETA:			       2.307
+NIFTY_UPSAMPLING:		           1.2
+NIFTY_SUPPORT:			           7
+NIFTY_BETA:			               2.307
 NIFTY_NUM_W_GRIDS_TO_BATCH:	       1
 
 # Deconvolution
@@ -69,6 +91,6 @@ LOOP_GAIN:                         0.1
 WEAK_SOURCE_THRESHOLD_CALIBRATION: 0.005
 WEAK_SOURCE_THRESHOLD_IMAGING:     0.0002
 NOISE_FACTOR:                      1.2
-SEARCH_REGION_PERCENT:             70.0
+SEARCH_REGION_PERCENT:             90.0
 
 # Direct Fourier Transform

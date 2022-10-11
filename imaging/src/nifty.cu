@@ -47,9 +47,9 @@ void nifty_gridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_H
 
     printf("UPDATE >>> Executing Nifty Gridder run...\n\n");
 	//perform nifty - nifty_gridding_run, fft_run ect ect
-	start_timer(&timings->solver);
-	nifty_gridding_run(config,device);
-	stop_timer(&timings->solver);
+	start_timer(&timings->solver, config->enable_psf);
+	nifty_gridding_run(config,host,device, timings);
+	stop_timer(&timings->solver, config->enable_psf);
 
     if(config->enable_psf)
         psf_normalization_nifty(config, device);
@@ -69,35 +69,31 @@ void nifty_degridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem
     
     
     nifty_degridding_set_up(config, host, device);
-	start_timer(&timings->predict);
-    nifty_degridding_run(config,device);
-	stop_timer(&timings->predict);
+	start_timer(&timings->predict, false);
+    nifty_degridding_run(config, host, device, timings);
+	stop_timer(&timings->predict, false);
 
     if(!config->retain_device_mem)
     {	// Transfer device mem back to host (only required data, and for retain data flag)
-        nifty_visibility_transfer(config, host, device);
         nifty_clean_up(device);
     }
-
 }
 
 
 void nifty_degridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
 {
 	if(device->d_visibilities == NULL)
-	{	printf("UPDATE >>> Copying predicted visibilities to device, number of visibilities: %d...\n\n",config->num_visibilities);
-	    CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->num_visibilities));
-		CUDA_CHECK_RETURN(cudaMemset(device->d_visibilities, 0, config->num_visibilities * sizeof(VIS_PRECISION2)));
+	{	printf("UPDATE >>> Allocating Predicted visibility batch to device: %d...\n\n",config->vis_batch_size);
+	    CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->vis_batch_size));
 	    cudaDeviceSynchronize();
 	}
-	else
-		CUDA_CHECK_RETURN(cudaMemset(device->d_visibilities, 0, config->num_visibilities * sizeof(VIS_PRECISION2)));
+	CUDA_CHECK_RETURN(cudaMemset(device->d_visibilities, 0, config->vis_batch_size * sizeof(VIS_PRECISION2)));
 	
 	if(device->d_vis_uvw_coords == NULL)
-	{  	printf("UPDATE >>> Copying UVW coords: %d...\n\n",config->num_visibilities);
-		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->num_visibilities));
-	    CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords, sizeof(PRECISION3) * config->num_visibilities,
-        	cudaMemcpyHostToDevice));
+	{  	printf("UPDATE >>> Allocating UVW coords: %d...\n\n",config->uvw_batch_size);
+		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->uvw_batch_size));
+	    //CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords, sizeof(PRECISION3) * config->num_visibilities,
+        //	cudaMemcpyHostToDevice));
     	cudaDeviceSynchronize();
 	}
 	if(device->d_w_grid_stack == NULL)
@@ -111,9 +107,9 @@ void nifty_degridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_
 		CUDA_CHECK_RETURN(cudaMemset(device->d_w_grid_stack, 0, num_w_grid_stack_cells * sizeof(PRECISION2)));
 	}
 	if(device->d_vis_weights == NULL)
-    {   printf("UPDATE >>> Allocating weights %d..\n\n", config->num_visibilities);
-        CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_weights), sizeof(VIS_PRECISION) * config->num_visibilities));
-        CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights, sizeof(VIS_PRECISION) * config->num_visibilities, cudaMemcpyHostToDevice));
+    {   printf("UPDATE >>> Allocating weights %d..\n\n", config->vis_batch_size);
+        CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_weights), sizeof(VIS_PRECISION) * config->vis_batch_size));
+        //CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights, sizeof(VIS_PRECISION) * config->num_visibilities, cudaMemcpyHostToDevice));
     }
 	if(device->d_prolate == NULL)
     {   printf("UPDATE >>> Allocating the prolate..\n\n");
@@ -150,15 +146,6 @@ void nifty_degridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_
 
     printf("UPDATE >>> Finished setting up device side NIFTY buffers ...\n\n");
 }
-
-
-void nifty_visibility_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
-{
-	CUDA_CHECK_RETURN(cudaMemcpy(host->visibilities, device->d_visibilities, 
-        config->num_visibilities * sizeof(VIS_PRECISION2), cudaMemcpyDeviceToHost));
-    cudaDeviceSynchronize();	
-}
-
 
 void execute_source_list_to_image(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
 {
@@ -207,14 +194,10 @@ void execute_source_list_to_image(Config *config, Host_Mem_Handles *host, Device
     }
 }
 
-void nifty_degridding_run(Config *config, Device_Mem_Handles *device)
+void nifty_degridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timings)
 {
-	int min_cuda_grid_size;
-    int cuda_block_size;
-    cudaOccupancyMaxPotentialBlockSize(&min_cuda_grid_size, &cuda_block_size, nifty_gridding, 0, 0);
-    int cuda_grid_size = (config->num_visibilities + cuda_block_size - 1) / cuda_block_size;  // create 1 thread per visibility to be gridded
-    printf("UPDATE >>> Nifty De-Gridder using grid size %d where minimum grid size available is %d and using block size %d..\n\n", cuda_grid_size,min_cuda_grid_size,cuda_block_size);
-    // Determine the block/thread distribution per w correction and summation batch
+	bool ignore_timings = false;
+	// Determine the block/thread distribution per w correction and summation batch
     // note: based on image size, not grid size, as we take inner region and discard padding
     dim3 w_correction_threads(
         min((uint32_t)32, (config->image_size + 1) / 2),
@@ -224,11 +207,8 @@ void nifty_degridding_run(Config *config, Device_Mem_Handles *device)
         (config->image_size/2 + 1 + w_correction_threads.x - 1) / w_correction_threads.x,  // allow extra in negative x quadrants, for asymmetric image centre
         (config->image_size/2 + 1 + w_correction_threads.y - 1) / w_correction_threads.y   // allow extra in negative y quadrants, for asymmetric image centre
     );
-
-    // Determine how many w grid subset batches to process in total
-    uint32_t total_w_grid_batches = (config->nifty_config.num_total_w_grids + config->nifty_config.num_w_grids_batched - 1) / config->nifty_config.num_w_grids_batched;
-    uint32_t num_w_grid_stack_cells = config->grid_size * config->grid_size * config->nifty_config.num_w_grids_batched;
-
+	
+	
     dim3 scalar_threads(
         min((uint32_t)32, config->grid_size),
         min((uint32_t)32, config->grid_size)
@@ -241,6 +221,7 @@ void nifty_degridding_run(Config *config, Device_Mem_Handles *device)
 	// 1. Undo convolution correction and scaling
 	PRECISION inv_w_range = 1.0 / (config->nifty_config.max_plane_w - config->nifty_config.min_plane_w);
 	
+	start_timer(&timings->predict_correction, ignore_timings);
 	conv_corr_and_scaling<<<w_correction_blocks, w_correction_threads>>>(
 		device->d_image,
 		config->image_size,
@@ -255,79 +236,148 @@ void nifty_degridding_run(Config *config, Device_Mem_Handles *device)
 	);
 	CUDA_CHECK_RETURN( cudaGetLastError() );
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	stop_timer(&timings->predict_correction, ignore_timings);
 
 
-	for(int batch = 0; batch < total_w_grid_batches; batch++)
-	{
-		uint32_t num_w_grids_subset = min(
-			config->nifty_config.num_w_grids_batched,
-			config->nifty_config.num_total_w_grids - ((batch * config->nifty_config.num_w_grids_batched) % config->nifty_config.num_total_w_grids)
-		);
 
-		int32_t grid_start_w = batch*config->nifty_config.num_w_grids_batched;
-
-		printf("Reversing...\n");
-
-		// 2. Undo w-stacking and dirty image accumulation
-		reverse_w_screen_to_stack<<<w_correction_blocks, w_correction_threads>>>(
-			device->d_image,
-			config->image_size,
-			config->cell_size_rad,
-			device->d_w_grid_stack,
-			config->grid_size,
-			grid_start_w,
-			num_w_grids_subset,
-			config->w_scale,
-			config->nifty_config.min_plane_w,
-			config->nifty_config.perform_shift_fft
-		);
-
-		CUDA_CHECK_RETURN(cudaGetLastError());
-		CUDA_CHECK_RETURN(cudaDeviceSynchronize());
-
-		printf("Reversing FINISHED...\n");
-
-		// 3. Batch FFT
-		CUFFT_SAFE_CALL(CUFFT_EXECUTE_C2C(*(device->fft_plan), device->d_w_grid_stack, device->d_w_grid_stack, CUFFT_FORWARD));
-		CUDA_CHECK_RETURN( cudaGetLastError() );
-		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
-
-		//  scale_for_FFT<<<scalar_blocks, scalar_threads>>>(
-		//     device->d_w_grid_stack, 
-		//     num_w_grids_subset, 
-		//     config->grid_size, 
-		//     1.0/(config->grid_size*config->grid_size)
-		// );
-
-		nifty_gridding<<<cuda_grid_size, cuda_block_size>>>(
-			device->d_visibilities,
-			device->d_vis_weights,
-			device->d_vis_uvw_coords,
-			config->num_visibilities,
-			device->d_w_grid_stack,
-			config->grid_size,
-			grid_start_w,
-			num_w_grids_subset,
-			config->nifty_config.support,
-			config->nifty_config.beta,
-			config->nifty_config.upsampling,
-			config->uv_scale,
-			config->w_scale, 
-			config->nifty_config.min_plane_w,
-			config->frequency_hz / PRECISION(SPEED_OF_LIGHT),
-			config->enable_psf,
-			config->nifty_config.perform_shift_fft,
-			false // degridding
-		);
-		CUDA_CHECK_RETURN( cudaGetLastError() );
-		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	int total_num_batches = (int)CEIL(double(config->num_timesteps) / double(config->timesteps_per_batch));
+		
+	int visLeftToProcess = config->num_host_visibilities;
+	int uwvLeftToProcess = config->num_host_uvws;
 	
-		// Reset intermediate w grid buffer for next batch
-		printf("UPDATE >>> Resetting device w grid stack memory for next batch...\n");
-		CUDA_CHECK_RETURN(cudaMemset(device->d_w_grid_stack, 0, num_w_grid_stack_cells * sizeof(PRECISION2)));
-		CUDA_CHECK_RETURN( cudaGetLastError() );
-		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	PRECISION freq_inc = 0.0;
+	if(config->number_frequency_channels > 1)
+		freq_inc = PRECISION(config->frequency_bandwidth) / (config->number_frequency_channels-1); 
+	
+	memset(host->visibilities,0,config->num_host_visibilities*sizeof(VIS_PRECISION2));
+	
+	for(int ts_batch=0;ts_batch<total_num_batches; ts_batch++)
+	{	//copy vis UVW here
+		//fill UVW and VIS
+		printf("De-griddding batch number %d ...\n",ts_batch);
+		int current_vis_batch_size = min(visLeftToProcess, config->vis_batch_size);
+		int current_uvw_batch_size = min(uwvLeftToProcess, config->uvw_batch_size);
+		
+		
+
+		// Determine how many w grid subset batches to process in total
+		start_timer(&timings->predict_data_ingress, ignore_timings);
+		CUDA_CHECK_RETURN(cudaMemset(device->d_visibilities, 0, current_vis_batch_size * sizeof(VIS_PRECISION2)));
+		
+		//CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights+(ts_batch*config->vis_batch_size),
+		//			sizeof(VIS_PRECISION) * current_vis_batch_size, cudaMemcpyHostToDevice));
+		
+		CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords+(ts_batch*config->uvw_batch_size), 
+					sizeof(PRECISION3) * current_uvw_batch_size, cudaMemcpyHostToDevice));
+		cudaDeviceSynchronize();
+		stop_timer(&timings->predict_data_ingress, ignore_timings);
+
+		int min_cuda_grid_size;
+		int cuda_block_size;
+		cudaOccupancyMaxPotentialBlockSize(&min_cuda_grid_size, &cuda_block_size, nifty_gridding, 0, 0);
+		int cuda_grid_size = (current_vis_batch_size + cuda_block_size - 1) / cuda_block_size;  // create 1 thread per visibility to be gridded
+		printf("UPDATE >>> Nifty De-Gridder using grid size %d where minimum grid size available is %d and using block size %d..\n\n", cuda_grid_size,min_cuda_grid_size,cuda_block_size);
+		
+		uint32_t total_w_grid_batches = (config->nifty_config.num_total_w_grids + config->nifty_config.num_w_grids_batched - 1) / config->nifty_config.num_w_grids_batched;
+		uint32_t num_w_grid_stack_cells = config->grid_size * config->grid_size * config->nifty_config.num_w_grids_batched;
+		
+		for(int batch = 0; batch < total_w_grid_batches; batch++)
+		{
+			uint32_t num_w_grids_subset = min(
+				config->nifty_config.num_w_grids_batched,
+				config->nifty_config.num_total_w_grids - ((batch * config->nifty_config.num_w_grids_batched) % config->nifty_config.num_total_w_grids)
+			);
+
+			int32_t grid_start_w = batch*config->nifty_config.num_w_grids_batched;
+
+			printf("Reversing...\n");
+
+			// 2. Undo w-stacking and dirty image accumulation
+			start_timer(&timings->nifty_predict_stack, ignore_timings);
+			reverse_w_screen_to_stack<<<w_correction_blocks, w_correction_threads>>>(
+				device->d_image,
+				config->image_size,
+				config->cell_size_rad,
+				device->d_w_grid_stack,
+				config->grid_size,
+				grid_start_w,
+				num_w_grids_subset,
+				config->w_scale,
+				config->nifty_config.min_plane_w,
+				config->nifty_config.perform_shift_fft
+			);
+			CUDA_CHECK_RETURN(cudaGetLastError());
+			CUDA_CHECK_RETURN(cudaDeviceSynchronize());
+			stop_timer(&timings->nifty_predict_stack, ignore_timings);
+
+			printf("Reversing FINISHED...\n");
+
+			// 3. Batch FFT
+			start_timer(&timings->fft, ignore_timings);
+			CUFFT_SAFE_CALL(CUFFT_EXECUTE_C2C(*(device->fft_plan), device->d_w_grid_stack, device->d_w_grid_stack, CUFFT_FORWARD));
+			CUDA_CHECK_RETURN( cudaGetLastError() );
+			CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+			stop_timer(&timings->fft, ignore_timings);
+
+			//  scale_for_FFT<<<scalar_blocks, scalar_threads>>>(
+			//     device->d_w_grid_stack, 
+			//     num_w_grids_subset, 
+			//     config->grid_size, 
+			//     1.0/(config->grid_size*config->grid_size)
+			// );
+
+
+			start_timer(&timings->degridder, ignore_timings);
+			nifty_gridding<<<cuda_grid_size, cuda_block_size>>>(
+				device->d_visibilities,
+				device->d_vis_weights,
+				device->d_vis_uvw_coords,
+				current_vis_batch_size,
+				device->d_w_grid_stack,
+				config->grid_size,
+				grid_start_w,
+				num_w_grids_subset,
+				config->nifty_config.support,
+				config->nifty_config.beta,
+				config->nifty_config.upsampling,
+				config->uv_scale,
+				config->w_scale, 
+				config->nifty_config.min_plane_w,
+				config->number_frequency_channels, 
+				config->num_baselines, 
+				config->frequency_hz_start, 
+				freq_inc,
+				config->enable_psf,
+				config->nifty_config.perform_shift_fft,
+				false // degridding
+			);
+			CUDA_CHECK_RETURN( cudaGetLastError() );
+			CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+			stop_timer(&timings->degridder, ignore_timings);
+	
+			// Reset intermediate w grid buffer for next batch
+			printf("UPDATE >>> Resetting device w grid stack memory for next batch...\n");
+			CUDA_CHECK_RETURN(cudaMemset(device->d_w_grid_stack, 0, num_w_grid_stack_cells * sizeof(PRECISION2)));
+			CUDA_CHECK_RETURN( cudaGetLastError() );
+			CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+		}
+				
+		start_timer(&timings->predict_data_egress, ignore_timings);		
+		CUDA_CHECK_RETURN(cudaMemcpy(host->visibilities+(ts_batch*config->vis_batch_size), device->d_visibilities, 
+						sizeof(VIS_PRECISION2) * current_vis_batch_size, cudaMemcpyDeviceToHost));
+		cudaDeviceSynchronize();
+		stop_timer(&timings->predict_data_egress, ignore_timings);	
+		
+		visLeftToProcess -= config->vis_batch_size;
+		uwvLeftToProcess -= config->uvw_batch_size;
 	}
+	
+	CUDA_CHECK_RETURN(cudaFree(device->d_vis_weights));
+		device->d_vis_weights = NULL;
+	CUDA_CHECK_RETURN(cudaFree(device->d_visibilities));
+		device->d_visibilities = NULL;
+	CUDA_CHECK_RETURN(cudaFree(device->d_vis_uvw_coords));
+		device->d_vis_uvw_coords = NULL;	
 }
 
 void nifty_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
@@ -385,18 +435,10 @@ void nifty_clean_up(Device_Mem_Handles *device)
 	device->d_prolate = NULL;
 }
 
-
-
-void nifty_gridding_run(Config *config, Device_Mem_Handles *device)
+void nifty_gridding_run(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timings)
 {
-	int min_cuda_grid_size;
-    int cuda_block_size;
-    cudaOccupancyMaxPotentialBlockSize(&min_cuda_grid_size, &cuda_block_size, nifty_gridding, 0, 0);
-    int cuda_grid_size = (config->num_visibilities + cuda_block_size - 1) / cuda_block_size;  // create 1 thread per visibility to be gridded
-    printf("UPDATE >>> Nifty Gridder using grid size %d where minimum grid size available is %d and using block size %d..\n\n", cuda_grid_size,min_cuda_grid_size,cuda_block_size);
-
-
-    // Determine the block/thread distribution per w correction and summation batch
+	bool ignore_timings = config->enable_psf;
+	// Determine the block/thread distribution per w correction and summation batch
     // note: based on image size, not grid size, as we take inner region and discard padding
     dim3 w_correction_threads(
         min((uint32_t)32, (config->image_size + 1) / 2),
@@ -406,110 +448,175 @@ void nifty_gridding_run(Config *config, Device_Mem_Handles *device)
         (config->image_size/2 + 1 + w_correction_threads.x - 1) / w_correction_threads.x,  // allow extra in negative x quadrants, for asymmetric image centre
         (config->image_size/2 + 1 + w_correction_threads.y - 1) / w_correction_threads.y   // allow extra in negative y quadrants, for asymmetric image centre
     );
+	
+	int total_num_batches = (int)CEIL(double(config->num_timesteps) / double(config->timesteps_per_batch));
+		
+	int visLeftToProcess = config->num_host_visibilities;
+	int uwvLeftToProcess = config->num_host_uvws;
+	
+	PRECISION freq_inc = 0.0;
+	if(config->number_frequency_channels > 1)
+		freq_inc = PRECISION(config->frequency_bandwidth) / (config->number_frequency_channels-1); 
+	
+	for(int ts_batch=0;ts_batch<total_num_batches; ts_batch++)
+	{	//copy vis UVW here
+		//fill UVW and VIS
+		printf("Gridding batch number %d ...\n",ts_batch);
+		
+		int current_vis_batch_size = min(visLeftToProcess, config->vis_batch_size);
+		int current_uvw_batch_size = min(uwvLeftToProcess, config->uvw_batch_size);
+		
+		start_timer(&timings->solver_data_ingress, ignore_timings);
+		CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights+(ts_batch*config->vis_batch_size),
+			sizeof(VIS_PRECISION) * current_vis_batch_size, cudaMemcpyHostToDevice));
+		
+		if(!config->enable_psf)
+		{	CUDA_CHECK_RETURN(cudaMemcpy(device->d_visibilities, host->visibilities+(ts_batch*config->vis_batch_size), 
+				sizeof(VIS_PRECISION2) * current_vis_batch_size, cudaMemcpyHostToDevice));
+		}
+		CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords+(ts_batch*config->uvw_batch_size), 
+			sizeof(PRECISION3) * current_uvw_batch_size, cudaMemcpyHostToDevice));
+		cudaDeviceSynchronize();
+		stop_timer(&timings->solver_data_ingress, ignore_timings);
+	
+		int min_cuda_grid_size;
+		int cuda_block_size;
+		cudaOccupancyMaxPotentialBlockSize(&min_cuda_grid_size, &cuda_block_size, nifty_gridding, 0, 0);
+		int cuda_grid_size = (current_vis_batch_size + cuda_block_size - 1) / cuda_block_size;  // create 1 thread per visibility to be gridded
+		// RENABLE ME: printf("UPDATE >>> Nifty Gridder using grid size %d where minimum grid size available is %d and using block size %d..\n\n", cuda_grid_size,min_cuda_grid_size,cuda_block_size);
 
-    // Determine how many w grid subset batches to process in total
-    uint32_t total_w_grid_batches = (config->nifty_config.num_total_w_grids + config->nifty_config.num_w_grids_batched - 1) / config->nifty_config.num_w_grids_batched;
-    uint32_t num_w_grid_stack_cells = config->grid_size * config->grid_size * config->nifty_config.num_w_grids_batched;
+		uint32_t total_w_grid_batches = (config->nifty_config.num_total_w_grids + config->nifty_config.num_w_grids_batched - 1) / config->nifty_config.num_w_grids_batched;
+		uint32_t num_w_grid_stack_cells = config->grid_size * config->grid_size * config->nifty_config.num_w_grids_batched;
 
-    for(int batch = 0; batch < total_w_grid_batches; batch++)
-    {
-        uint32_t num_w_grids_subset = min(
-            config->nifty_config.num_w_grids_batched,
-            config->nifty_config.num_total_w_grids - ((batch * config->nifty_config.num_w_grids_batched) % config->nifty_config.num_total_w_grids)
-        );
+		// Determine how many w grid subset batches to process in total
 
-        int32_t grid_start_w = batch*config->nifty_config.num_w_grids_batched;
+		for(int batch = 0; batch < total_w_grid_batches; batch++)
+		{
+			uint32_t num_w_grids_subset = min(
+				config->nifty_config.num_w_grids_batched,
+				config->nifty_config.num_total_w_grids - ((batch * config->nifty_config.num_w_grids_batched) % config->nifty_config.num_total_w_grids)
+			);
 
-        printf("Gridder calling nifty_gridding kernel for w grids %d to %d (%d planes in current batch)", 
-				grid_start_w, (grid_start_w + (int32_t)num_w_grids_subset - 1), num_w_grids_subset);
-        
-        // Perform gridding on a "chunk" of w grids
-        nifty_gridding<<<cuda_grid_size, cuda_block_size>>>(
-            device->d_visibilities,
-            device->d_vis_weights,
-            device->d_vis_uvw_coords,
-            config->num_visibilities,
-            device->d_w_grid_stack,
-            config->grid_size,
-            grid_start_w,
-            num_w_grids_subset,
-            config->nifty_config.support,
-            config->nifty_config.beta,
-            config->nifty_config.upsampling,
-            config->uv_scale,
-            config->w_scale, 
-            config->nifty_config.min_plane_w,
-            config->frequency_hz / PRECISION(SPEED_OF_LIGHT),
-            config->enable_psf,
-            config->nifty_config.perform_shift_fft,
-			true
-        );
+			int32_t grid_start_w = batch*config->nifty_config.num_w_grids_batched;
 
-        /**************************************************************************************
-         * TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY
-         *************************************************************************************/
-        // // Copy back and save each w grid to file for review of accuracy
-        // std::cout << "Copying back grid stack from device to host..." << std::endl; 
-        // proof_of_concept_copy_w_grid_stack_to_host(host, device, config);
-        // // Save each w grid into single file of complex type, use python to render via matplotlib
-        // std::cout << "Saving grid stack to file..." << std::endl;
-        // proof_of_concept_save_w_grids_to_file(host, config, batch);
-        /**************************************************************************************
-         * TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY
-         *************************************************************************************/
+			// RENABLE ME: printf("Gridder calling nifty_gridding kernel for w grids %d to %d (%d planes in current batch)\n\n", 
+			// RENABLE ME:		grid_start_w, (grid_start_w + (int32_t)num_w_grids_subset - 1), num_w_grids_subset);
+			
+			// Perform gridding on a "chunk" of w grids
+			start_timer(&timings->gridder, ignore_timings);
+			nifty_gridding<<<cuda_grid_size, cuda_block_size>>>(
+				device->d_visibilities,
+				device->d_vis_weights,
+				device->d_vis_uvw_coords,
+				current_vis_batch_size,
+				device->d_w_grid_stack,
+				config->grid_size,
+				grid_start_w,
+				num_w_grids_subset,
+				config->nifty_config.support,
+				config->nifty_config.beta,
+				config->nifty_config.upsampling,
+				config->uv_scale,
+				config->w_scale, 
+				config->nifty_config.min_plane_w,
+				config->number_frequency_channels, 
+				config->num_baselines, 
+				config->frequency_hz_start, 
+				freq_inc,
+				config->enable_psf,
+				config->nifty_config.perform_shift_fft,
+				true
+			);
+			CUDA_CHECK_RETURN( cudaGetLastError() );
+			CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+			stop_timer(&timings->gridder, ignore_timings);
 
-        // Perform 2D FFT on each bound w grid
-		printf("UPDATE >>> Nifty Gridder calling CUFFT...\n\n");
-        CUFFT_SAFE_CALL(CUFFT_EXECUTE_C2C(*(device->fft_plan), device->d_w_grid_stack, device->d_w_grid_stack, CUFFT_INVERSE));
+			/**************************************************************************************
+			 * TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY
+			 *************************************************************************************/
+			// // Copy back and save each w grid to file for review of accuracy
+			// std::cout << "Copying back grid stack from device to host..." << std::endl; 
+			// proof_of_concept_copy_w_grid_stack_to_host(host, device, config);
+			// // Save each w grid into single file of complex type, use python to render via matplotlib
+			// std::cout << "Saving grid stack to file..." << std::endl;
+			// proof_of_concept_save_w_grids_to_file(host, config, batch);
+			/**************************************************************************************
+			 * TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY
+			 *************************************************************************************/
 
-        /**************************************************************************************
-         * TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY
-         *************************************************************************************/
-        // // Copy back and save each w grid to file for review of accuracy
-        // std::cout << "Copying back grid stack from device to host..." << std::endl; 
-        // proof_of_concept_copy_w_grid_stack_to_host(host, device, config);
-        // // Save each w grid into single file of complex type, use python to render via matplotlib
-        // std::cout << "Saving grid stack to file..." << std::endl;
-        // proof_of_concept_save_w_images_to_file(host, config, batch);
+			// Perform 2D FFT on each bound w grid
+			// RENABLE ME: printf("UPDATE >>> Nifty Gridder calling CUFFT...\n\n");
+			start_timer(&timings->ifft, ignore_timings);
+			CUFFT_SAFE_CALL(CUFFT_EXECUTE_C2C(*(device->fft_plan), device->d_w_grid_stack, device->d_w_grid_stack, CUFFT_INVERSE));
+			CUDA_CHECK_RETURN( cudaGetLastError() );
+			CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+			stop_timer(&timings->ifft, ignore_timings);
 
-		// zero dirty image  (debugging option)
-        // CUDA_CHECK_RETURN(cudaMemset(device->d_dirty_image, 0, config->image_size * config->image_size * sizeof(PRECISION)));
+			/**************************************************************************************
+			 * TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY
+			 *************************************************************************************/
+			// // Copy back and save each w grid to file for review of accuracy
+			// std::cout << "Copying back grid stack from device to host..." << std::endl; 
+			// proof_of_concept_copy_w_grid_stack_to_host(host, device, config);
+			// // Save each w grid into single file of complex type, use python to render via matplotlib
+			// std::cout << "Saving grid stack to file..." << std::endl;
+			// proof_of_concept_save_w_images_to_file(host, config, batch);
 
-        /**************************************************************************************
-         * TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY
-         *************************************************************************************/
-        
-		// Perform phase shift on a "chunk" of planes and sum into single real plane
-        apply_w_screen_and_sum<<<w_correction_blocks, w_correction_threads>>>(
-            (config->enable_psf) ? device->d_psf : device->d_image,
-            config->image_size,
-            config->cell_size_rad,
-            device->d_w_grid_stack,
-            config->grid_size,
-            grid_start_w,
-            num_w_grids_subset,
-            PRECISION(1.0)/config->w_scale,
-            config->nifty_config.min_plane_w,
-            config->nifty_config.perform_shift_fft
-        );
+			// zero dirty image  (debugging option)
+			// CUDA_CHECK_RETURN(cudaMemset(device->d_dirty_image, 0, config->image_size * config->image_size * sizeof(PRECISION)));
 
-		// Copy back images, save to file  (debugging)
-		// copy_dirty_image_to_host(host, device, config);
-		// save_numbered_dirty_image_to_file(host, config, batch);
+			/**************************************************************************************
+			 * TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY - TESTING FUNCTIONALITY ONLY
+			 *************************************************************************************/
+			
+			start_timer(&timings->nifty_solve_stack, ignore_timings);
+			// Perform phase shift on a "chunk" of planes and sum into single real plane
+			apply_w_screen_and_sum<<<w_correction_blocks, w_correction_threads>>>(
+				(config->enable_psf) ? device->d_psf : device->d_image,
+				config->image_size,
+				config->cell_size_rad,
+				device->d_w_grid_stack,
+				config->grid_size,
+				grid_start_w,
+				num_w_grids_subset,
+				PRECISION(1.0)/config->w_scale,
+				config->nifty_config.min_plane_w,
+				config->nifty_config.perform_shift_fft
+			);
+			CUDA_CHECK_RETURN( cudaGetLastError() );
+			CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+			stop_timer(&timings->nifty_solve_stack, ignore_timings);
 
-        // Reset intermediate w grid buffer for next batch
-        //if(batch < total_w_grid_batches - 1)
-       // {
-            printf("UPDATE >>> Resetting device w grid stack memory for next batch..\n\n");
-            CUDA_CHECK_RETURN(cudaMemset(device->d_w_grid_stack, 0, num_w_grid_stack_cells * sizeof(PRECISION2)));
-        //}
-    }
+			// Copy back images, save to file  (debugging)
+			// copy_dirty_image_to_host(host, device, config);
+			// save_numbered_dirty_image_to_file(host, config, batch);
 
+			// Reset intermediate w grid buffer for next batch
+			//if(batch < total_w_grid_batches - 1)
+		   // {
+				// RENABLE ME: printf("UPDATE >>> Resetting device w grid stack memory for next batch..\n\n");
+				CUDA_CHECK_RETURN(cudaMemset(device->d_w_grid_stack, 0, num_w_grid_stack_cells * sizeof(PRECISION2)));
+			//}
+		}
+		
+		visLeftToProcess -= config->vis_batch_size;
+		uwvLeftToProcess -= config->uvw_batch_size;
+	}
+	
+	CUDA_CHECK_RETURN(cudaFree(device->d_vis_weights));
+		device->d_vis_weights = NULL;
+	CUDA_CHECK_RETURN(cudaFree(device->d_visibilities));
+		device->d_visibilities = NULL;
+	CUDA_CHECK_RETURN(cudaFree(device->d_vis_uvw_coords));
+		device->d_vis_uvw_coords = NULL;		
+	
+	
     // Need to determine final scaling factor for scaling dirty image by w grid accumulation
     PRECISION inv_w_range = 1.0 / (config->nifty_config.max_plane_w - config->nifty_config.min_plane_w);
 
     // Perform convolution correction and final scaling on single real plane
     // note: can recycle same block/thread dims as w correction kernel
+    start_timer(&timings->solve_correction, ignore_timings);
     conv_corr_and_scaling<<<w_correction_blocks, w_correction_threads>>>(
         (config->enable_psf) ? device->d_psf : device->d_image,
         config->image_size,
@@ -522,6 +629,9 @@ void nifty_gridding_run(Config *config, Device_Mem_Handles *device)
 		PRECISION(1.0)/config->w_scale,
 		true
     );
+	CUDA_CHECK_RETURN( cudaGetLastError() );
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+    stop_timer(&timings->solve_correction, ignore_timings);
 }
 
 void psf_normalization_nifty(Config *config, Device_Mem_Handles *device)
@@ -579,18 +689,18 @@ void nifty_host_side_setup(Config *config, Host_Mem_Handles *host)
 void nifty_gridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device)
 {		
 	if(device->d_visibilities == NULL && !config->enable_psf)
-	{	printf("UPDATE >>> Copying predicted visibilities to device, number of visibilities: %d...\n\n",config->num_visibilities);
-	    CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->num_visibilities));
-	    CUDA_CHECK_RETURN(cudaMemcpy(device->d_visibilities, host->visibilities, sizeof(VIS_PRECISION2) * config->num_visibilities,
-	        cudaMemcpyHostToDevice));
-	    cudaDeviceSynchronize();
+	{
+	    CUDA_CHECK_RETURN(cudaMalloc(&(device->d_visibilities), sizeof(VIS_PRECISION2) * config->vis_batch_size));
+	    //CUDA_CHECK_RETURN(cudaMemcpy(device->d_visibilities, host->visibilities, sizeof(VIS_PRECISION2) * config->num_visibilities,
+	    //    cudaMemcpyHostToDevice));
+	    //cudaDeviceSynchronize();
 	}
 	if(device->d_vis_uvw_coords == NULL)
-	{  printf("UPDATE >>> Copying UVW coords: %d...\n\n",config->num_visibilities);
-		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->num_visibilities));
-	    CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords, sizeof(PRECISION3) * config->num_visibilities,
-        	cudaMemcpyHostToDevice));
-    	cudaDeviceSynchronize();
+	{  
+		CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_uvw_coords), sizeof(PRECISION3) * config->uvw_batch_size));
+	//    CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_uvw_coords, host->vis_uvw_coords, sizeof(PRECISION3) * config->num_visibilities,
+    //    	cudaMemcpyHostToDevice));
+    //	cudaDeviceSynchronize();
 	}
 	if(!config->enable_psf && device->d_image == NULL)
 	{  printf("UPDATE >>> Allocating IMAGE ON DEVICE: %d...\n\n", config->image_size);
@@ -614,9 +724,9 @@ void nifty_gridding_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Ha
         CUDA_CHECK_RETURN(cudaMemset(device->d_w_grid_stack, 0, num_w_grid_stack_cells * sizeof(PRECISION2)));
     }
 	if(device->d_vis_weights == NULL)
-    {   printf("UPDATE >>> Allocating weights %d..\n\n", config->num_visibilities);
-        CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_weights), sizeof(VIS_PRECISION) * config->num_visibilities));
-        CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights, sizeof(VIS_PRECISION) * config->num_visibilities, cudaMemcpyHostToDevice));
+    { 
+        CUDA_CHECK_RETURN(cudaMalloc(&(device->d_vis_weights), sizeof(VIS_PRECISION) * config->vis_batch_size));
+       // CUDA_CHECK_RETURN(cudaMemcpy(device->d_vis_weights, host->vis_weights, sizeof(VIS_PRECISION) * config->num_visibilities, cudaMemcpyHostToDevice));
     }
 	if(device->d_prolate == NULL)
     {   printf("UPDATE >>> Allocating the prolate..\n\n");
@@ -790,7 +900,7 @@ double calculate_legendre_root(int32_t i, int32_t n, double accuracy, double *we
 * Note this convolutional correction is not normalised, 
 * but is normalised during use in convolution correction by C(0) to get max of 1
 **********************************************************************/
-__device__ PRECISION conv_corr(PRECISION support, PRECISION k)
+__device__ PRECISION conv_corr(const PRECISION support, const PRECISION k)
 {
     PRECISION correction = 0.0;
     uint32_t p = (uint32_t)(CEIL(PRECISION(1.5)*support + PRECISION(2.0)));
@@ -807,14 +917,14 @@ __device__ PRECISION conv_corr(PRECISION support, PRECISION k)
  * Source Paper: A parallel non-uniform fast Fourier transform library based on an "exponential of semicircle" kernel
  * Address: https://arxiv.org/abs/1808.06736
  **********************************************************************/
-__device__ PRECISION exp_semicircle(PRECISION beta, PRECISION x)
+__device__ PRECISION exp_semicircle(const PRECISION beta, const PRECISION x)
 {
 	PRECISION xx = x*x;
 
     if (xx > 1.0)  // to ensure we don't try to take the square root of a negative number
         return (0.0);
     else
-		return VEXP(beta*(VSQRT(1.0 - xx) - 1.0));
+		return ((xx > PRECISION(1.0)) ? PRECISION(1.0) : VEXP(beta*(VSQRT(PRECISION(1.0) - xx) - PRECISION(1.0))));
         //return (VEXP(beta*(VSQRT(VIS_PRECISION(1.0) - (xx)) - VIS_PRECISION(1.0))));
 } 
 
@@ -823,13 +933,13 @@ __device__ PRECISION exp_semicircle(PRECISION beta, PRECISION x)
  * w layer (note: w layer = iFFT(w grid))
  * Note: l and m are expected to be in the range  [-0.5, 0.5]
  **********************************************************************/
-__device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISION signage)
+__device__ PRECISION2 phase_shift(const PRECISION w, const PRECISION l, const PRECISION m, const PRECISION signage)
 {
     // calc the sum of squares
-    PRECISION sos = l*l + m*m;
-    PRECISION nm1 = (-sos)/(SQRT(PRECISION(1.0)-sos) + PRECISION(1.0));
-    PRECISION x = PRECISION(2.0)*PI*w*(nm1);
-    PRECISION xn = PRECISION(1.0)/(nm1 + PRECISION(1.0));
+    const PRECISION sos = l*l + m*m;
+    const PRECISION nm1 = (-sos)/(SQRT(PRECISION(1.0)-sos) + PRECISION(1.0));
+    const PRECISION x = PRECISION(2.0)*PI*w*(nm1);
+    const PRECISION xn = PRECISION(1.0)/(nm1 + PRECISION(1.0));
     PRECISION sinx;
     PRECISION cosx;
     // signage = -1.0 if solving, 1.0 if predicting
@@ -843,12 +953,12 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
  **********************************************************************/
  __global__ void nifty_gridding(
     
-    VIS_PRECISION2 *visibilities, // INPUT(gridding) OR OUTPUT(degridding): complex visibilities
-    const VIS_PRECISION *vis_weights, // INPUT: weight for each visibility
-    const PRECISION3 *uvw_coords, // INPUT: (u, v, w) coordinates for each visibility
+    VIS_PRECISION2* __restrict__ visibilities, // INPUT(gridding) OR OUTPUT(degridding): complex visibilities
+    const VIS_PRECISION* const __restrict__  vis_weights, // INPUT: weight for each visibility
+    const PRECISION3* __restrict__ uvw_coords, // INPUT: (u, v, w) coordinates for each visibility
     const uint32_t num_visibilities, // total num visibilities
 
-    PRECISION2 *w_grid_stack, // OUTPUT: flat array containing 2D computed w grids, presumed initially clear
+    PRECISION2* __restrict__ w_grid_stack, // OUTPUT: flat array containing 2D computed w grids, presumed initially clear
     const uint32_t grid_size, // one dimensional size of w_plane (image_size * upsampling), assumed square
     const int32_t grid_start_w, // signed index of first w grid in current subset stack
     const uint32_t num_w_grids_subset, // number of w grids bound in current subset stack
@@ -858,8 +968,11 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
     const PRECISION upsampling, // upscaling factor for determining grid size (sigma)
     const PRECISION uv_scale, // scaling factor for conversion of uv coords to grid coordinates (grid_size * cell_size)
     const PRECISION w_scale, // scaling factor for converting w coord to signed w grid index
-    const PRECISION min_plane_w, // w coordinate of smallest w plane
-    const PRECISION metres_wavelength_scale, // for w coordinate
+    const PRECISION min_plane_w, // w coordinate of smallest w plane  
+	const int num_channels,
+	const int num_baselines,
+	const PRECISION metres_wavelength_scale, // for w coordinate	
+	const PRECISION freqInc,
     const bool generating_psf, // flag for enabling/disabling creation of PSF using same gridding code
     const bool perform_shift_fft, // flag to (equivalently) rearrange each grid so origin is at lower-left corner for FFT
     const bool solving // flag to enable degridding operations instead of gridding
@@ -869,26 +982,47 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
 
     if (i < (int32_t)num_visibilities)
     {
-        const PRECISION half_support = PRECISION(support)/2.0; // NOTE confirm everyone's understanding of what support means eg when even/odd
-        const int32_t grid_min_uv = -(int32_t)grid_size/2; // minimum coordinate on grid along u or v axes
-        const int32_t grid_max_uv = ((int32_t)grid_size-1)/2; // maximum coordinate on grid along u or v axes
-
+		
+		int timeStepOffset = i/(num_channels*num_baselines);
+		int uvwIndex = (i % num_baselines) + (timeStepOffset*num_baselines);
+		PRECISION3 local_uvw = uvw_coords[uvwIndex];
+		
+		//chnnelNum - visIndex 
+		int channelNumber = (i / num_baselines) % num_channels; 
+		
+		PRECISION freqScale = (metres_wavelength_scale + channelNumber*freqInc) / PRECISION(SPEED_OF_LIGHT); //meters to wavelengths conversion
+		
+    
         // Determine whether to flip visibility coordinates, so w is usually positive
-        VIS_PRECISION flip = (uvw_coords[i].z < 0.0) ? -1.0 : 1.0; 
+        VIS_PRECISION flip = (local_uvw.z < 0.0) ? -1.0 : 1.0; 
+        const PRECISION inv_wavelength = PRECISION(flip) * freqScale;
+
+        VIS_PRECISION2 vis_weighted = MAKE_VIS_PRECISION2(0.0, 0.0);
+        if(solving)
+        {
+            vis_weighted = (generating_psf) ? MAKE_VIS_PRECISION2(1.0, 0.0) : visibilities[i];
+			
+            vis_weighted.x *= vis_weights[i];
+            vis_weighted.y *= vis_weights[i]; 
+            vis_weighted.y *= flip; // complex conjugate for negative w coords
+        }
 
         // Calculate bounds of where gridding kernel will be applied for this visibility
         PRECISION3 uvw_coord = MAKE_PRECISION3(
-            uvw_coords[i].x * uv_scale * (PRECISION)flip,
-            uvw_coords[i].y * uv_scale * (PRECISION)flip,
-            (uvw_coords[i].z * (PRECISION)flip * metres_wavelength_scale - min_plane_w) * w_scale
+            local_uvw.x * uv_scale * inv_wavelength,
+            local_uvw.y * uv_scale * inv_wavelength,
+            (local_uvw.z * inv_wavelength - min_plane_w) * w_scale
         );
 
-        int32_t grid_u_least = max((int32_t)CEIL(uvw_coord.x-(PRECISION)half_support), grid_min_uv);
-        int32_t grid_u_largest = min((int32_t)FLOOR(uvw_coord.x+(PRECISION)half_support), grid_max_uv);
-        int32_t grid_v_least = max((int32_t)CEIL(uvw_coord.y-(PRECISION)half_support), grid_min_uv);
-        int32_t grid_v_largest = min((int32_t)FLOOR(uvw_coord.y+(PRECISION)half_support), grid_max_uv);
-        int32_t grid_w_least = max((int32_t)CEIL(uvw_coord.z-(PRECISION)half_support), grid_start_w);
-        int32_t grid_w_largest = min((int32_t)FLOOR(uvw_coord.z+(PRECISION)half_support), grid_start_w+(int32_t)num_w_grids_subset-1);
+        const PRECISION half_support = PRECISION(support)/2.0; // NOTE confirm everyone's understanding of what support means eg when even/odd
+        const int32_t grid_min_uv = -(int32_t)grid_size/2; // minimum coordinate on grid along u or v axes
+        const int32_t grid_max_uv = ((int32_t)grid_size-1)/2; // maximum coordinate on grid along u or v axes
+        const int32_t grid_u_least = max((int32_t)CEIL(uvw_coord.x-(PRECISION)half_support), grid_min_uv);
+        const int32_t grid_u_largest = min((int32_t)FLOOR(uvw_coord.x+(PRECISION)half_support), grid_max_uv);
+        const int32_t grid_v_least = max((int32_t)CEIL(uvw_coord.y-(PRECISION)half_support), grid_min_uv);
+        const int32_t grid_v_largest = min((int32_t)FLOOR(uvw_coord.y+(PRECISION)half_support), grid_max_uv);
+        const int32_t grid_w_least = max((int32_t)CEIL(uvw_coord.z-(PRECISION)half_support), grid_start_w);
+        const int32_t grid_w_largest = min((int32_t)FLOOR(uvw_coord.z+(PRECISION)half_support), grid_start_w+(int32_t)num_w_grids_subset-1);
         // perform w coord check first to help short-circuit CUDA kernel execution
         if ((grid_w_least>grid_w_largest) || (grid_u_least>grid_u_largest) || (grid_v_least>grid_v_largest))
         {
@@ -896,37 +1030,31 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
         }
 
         // calculate the necessary kernel values along u and v directions for this uvw_coord
-        VIS_PRECISION inv_half_support = (VIS_PRECISION)1.0/(VIS_PRECISION)half_support;
+        PRECISION inv_half_support = (PRECISION)1.0/(PRECISION)half_support;
 
         // bound above the maximum possible support for use in nifty_gridding kernel when precalculating kernel values
-        VIS_PRECISION kernel_u[KERNEL_SUPPORT_BOUND];
+        PRECISION kernel_u[KERNEL_SUPPORT_BOUND];
         uint32_t kernel_index_u = 0;
         for (int32_t grid_coord_u=grid_u_least; grid_coord_u<=grid_u_largest; grid_coord_u++)
         {
-            kernel_u[kernel_index_u++] = exp_semicircle(beta, (VIS_PRECISION)(grid_coord_u-uvw_coord.x)*inv_half_support);
+            kernel_u[kernel_index_u++] = exp_semicircle(beta, (grid_coord_u-uvw_coord.x)*inv_half_support);
         }
 
-        VIS_PRECISION kernel_v[KERNEL_SUPPORT_BOUND];
+        PRECISION kernel_v[KERNEL_SUPPORT_BOUND];
         uint32_t kernel_index_v = 0;
         for (int32_t grid_coord_v=grid_v_least; grid_coord_v<=grid_v_largest; grid_coord_v++)
         {
-            kernel_v[kernel_index_v++] = exp_semicircle(VIS_PRECISION(beta), (VIS_PRECISION)(grid_coord_v-uvw_coord.y)*inv_half_support);
+            kernel_v[kernel_index_v++] = exp_semicircle(beta, (grid_coord_v-uvw_coord.y)*inv_half_support);
         }
 
-        VIS_PRECISION2 vis_weighted = MAKE_VIS_PRECISION2(0.0, 0.0);
-        if(solving)
-        {
-            vis_weighted = (generating_psf) ? MAKE_VIS_PRECISION2(1.0, 0.0) : visibilities[i];
-            vis_weighted.x *= vis_weights[i];
-            vis_weighted.y *= vis_weights[i] * flip; // complex conjugate for negative w coords
-        }
+        
 
         // iterate through each w-grid
         const int32_t origin_offset_uv = (int32_t)(grid_size/2); // offset of origin along u or v axes
 		
         for (int32_t grid_coord_w=grid_w_least; grid_coord_w<=grid_w_largest; grid_coord_w++)
         {
-            VIS_PRECISION kernel_w = exp_semicircle(beta, (VIS_PRECISION)(grid_coord_w-uvw_coord.z)*inv_half_support);
+            PRECISION kernel_w = exp_semicircle(beta, (grid_coord_w-uvw_coord.z)*inv_half_support);
             int32_t grid_index_offset_w = (grid_coord_w-grid_start_w)*(int32_t)(grid_size*grid_size);
             kernel_index_v = 0;
             for (int32_t grid_coord_v=grid_v_least; grid_coord_v<=grid_v_largest; grid_coord_v++)
@@ -936,19 +1064,17 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
                 for (int32_t grid_coord_u=grid_u_least; grid_coord_u<=grid_u_largest; grid_coord_u++)
                 {
                     // apply the separable kernel to the weighted visibility and accumulate at the grid_coord
-                    VIS_PRECISION kernel_value = kernel_u[kernel_index_u] * kernel_v[kernel_index_v] * kernel_w;
+                    PRECISION kernel_value = kernel_u[kernel_index_u] * kernel_v[kernel_index_v] * kernel_w;
                     bool odd_grid_coordinate = ((grid_coord_u + grid_coord_v) & (int32_t)1) != (int32_t)0;
                     kernel_value = (perform_shift_fft && odd_grid_coordinate) ? -kernel_value : kernel_value;
 
                     int32_t grid_offset_uvw = grid_index_offset_vw + (grid_coord_u+origin_offset_uv);
 
-				
-
                     if(solving) // accumulation of visibility onto w-grid plane
                     {	
                         // Atomic add of type double only supported on NVIDIA GPU architecture Pascal and above
-                        atomicAdd(&w_grid_stack[grid_offset_uvw].x, (PRECISION)(vis_weighted.x * kernel_value));
-                        atomicAdd(&w_grid_stack[grid_offset_uvw].y, (PRECISION)(vis_weighted.y * kernel_value));
+                        atomicAdd(&w_grid_stack[grid_offset_uvw].x, PRECISION(vis_weighted.x) * kernel_value);
+                        atomicAdd(&w_grid_stack[grid_offset_uvw].y, PRECISION(vis_weighted.y) * kernel_value);
                     }
                     else // extraction of visibility from w-grid plane
                     {
@@ -963,11 +1089,9 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
                 kernel_index_v++;
             }
         }
-
         if(!solving) // degridding
-        {
-            visibilities[i].x += vis_weighted.x;
-            visibilities[i].y += vis_weighted.y * flip;
+        {   visibilities[i].x += vis_weighted.x;
+            visibilities[i].y += (vis_weighted.y * flip);
         }
     }
 }
@@ -997,10 +1121,10 @@ __global__ void scale_for_FFT(PRECISION2 *w_grid_stack, const int num_w_planes, 
  * Parallelised so each CUDA thread processes one pixel in each quadrant of the dirty image
  **********************************************************************/
 __global__ void apply_w_screen_and_sum(
-    PRECISION *dirty_image, // INPUT & OUTPUT: real plane for accumulating phase corrected w layers across batches
+    PRECISION* __restrict__ dirty_image, // INPUT & OUTPUT: real plane for accumulating phase corrected w layers across batches
     const uint32_t image_size, // one dimensional size of image plane (grid_size / sigma), assumed square
     const PRECISION pixel_size, // converts pixel index (x, y) to normalised image coordinate (l, m) where l, m between -0.5 and 0.5
-    const PRECISION2 *w_grid_stack, // INPUT: flat array containing 2D computed w layers (w layer = iFFT(w grid))
+    const PRECISION2* const __restrict__ w_grid_stack, // INPUT: flat array containing 2D computed w layers (w layer = iFFT(w grid))
     const uint32_t grid_size, // one dimensional size of w_plane (image_size * upsampling), assumed square
     const int32_t grid_start_w, // index of first w grid in current subset stack
     const uint32_t num_w_grids_subset, // number of w grids bound in current subset stack
@@ -1268,4 +1392,60 @@ __global__ void psf_normalization_nifty_kernel(PRECISION max_psf, PRECISION *psf
     atomicAdd(&(image[image_index]), (PRECISION) source.z);
 
 }    
+// Calculates the multiplicand which is multiplied by support to give the beta value
 
+/*
+    Note this implementation is based on the Nifty Gridder implementation
+    at https://gitlab.mpcdf.mpg.de/ift/nifty_gridder in the function get_beta within gridder_cxx.h
+*/
+double get_beta_nifty(uint32_t support, double upsampling)
+{
+    // clamp support to be within allowed range for the array lookup
+    if (support < 1)
+        support = 1;
+    else if (support > 15)
+        support = 15;
+    if (upsampling >= 2.0)
+    {
+        const double beta_coeff[16] = {-1, 0.14, 1.70, 2.08, 2.205, 2.26, 2.29, 2.307, 2.316, 2.3265, 2.3324, 2.282, 2.294, 2.304, 2.3138, 2.317};
+        return beta_coeff[support];
+    }
+    else if (upsampling >= 1.175)
+    {
+        const double beta_correction[16] = {0,0,-0.51,-0.21,-0.1,-0.05,-0.025,-0.0125,0,0,0,0,0,0,0,0};
+        double x0 = 0.5/upsampling;
+        double bcstrength = 1.0+(x0-0.25)*2.5;
+        return (2.32 + bcstrength*beta_correction[support] + (0.25-x0)*3.1);
+    }
+    else
+        return 0.0; // this case not supported as upsampling too small
+}
+
+/*
+    Note this implementation is based on the Nifty Gridder implementation
+    at https://gitlab.mpcdf.mpg.de/ift/nifty_gridder in the function get_supp within gridder_cxx.h
+*/
+uint32_t get_support_nifty(double epsilon, double upsampling)
+{
+    double epsilon_squared = epsilon*epsilon;
+    if (upsampling >= 2.0)
+    {
+        const double maxmaperr[16] = {1e8, 0.19, 2.98e-3, 5.98e-5, 1.11e-6, 2.01e-8, 3.55e-10, 5.31e-12, 8.81e-14, 1.34e-15, 2.17e-17, 2.12e-19, 2.88e-21, 3.92e-23, 8.21e-25, 7.13e-27};
+        for (uint32_t supp=2; supp<16; supp++)
+        {
+            if (epsilon_squared > maxmaperr[supp])
+                return supp;
+        }
+    }
+    else if (upsampling >= 1.175)
+    {
+        // numerically approximate the required support
+        for (uint32_t supp=2; supp<16; supp++)
+        {
+            double estimate = 12.0*exp((double)(-2.0*supp)*upsampling);
+            if (epsilon_squared > estimate)
+                return supp;
+        }
+    }
+    return 0; // requested level of accuracy is not supported as too small or upsampling too small
+}

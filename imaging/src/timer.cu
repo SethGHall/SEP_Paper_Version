@@ -30,16 +30,47 @@
 
 #include "../timer.h"
 
-void start_timer(Timer *timer)
+void init_timer(Timer *timer)
 {
-	cudaEventCreate(&(timer->start));
-	cudaEventCreate(&(timer->end));
-	cudaEventRecord(timer->start);
-	cudaEventSynchronize(timer->start);
+	CUDA_CHECK_RETURN(cudaEventCreate(&(timer->start)));
+	CUDA_CHECK_RETURN(cudaEventCreate(&(timer->end)));
+	timer->accumulated_time_millis = 0.0;
+    timer->current_avg_time_millis = 0.0;
+    timer->sum_of_square_diff_millis = 0.0;
+    timer->iterations = 0;
 }
 
-void stop_timer(Timer *timer)
+void start_timer(Timer *timer, bool ignore)
 {
-	cudaEventRecord(timer->end);
-	cudaEventSynchronize(timer->end);
+	if(!ignore)
+	{
+		cudaEventRecord(timer->start);
+		cudaEventSynchronize(timer->start);	
+	}
+}
+
+void stop_timer(Timer *timer, bool ignore)
+{
+	if(!ignore)
+	{
+		cudaEventRecord(timer->end);
+		cudaEventSynchronize(timer->end);
+		float elapsed = 0.0;
+		cudaEventElapsedTime(&elapsed, timer->start, timer->end);
+		timer->accumulated_time_millis += elapsed;
+	    timer->iterations++;
+	    timer->current_avg_time_millis = timer->accumulated_time_millis / timer->iterations;
+	    timer->sum_of_square_diff_millis += (elapsed - timer->current_avg_time_millis) * (elapsed - timer->current_avg_time_millis);
+	}
+}
+
+void print_timer(Timer *timer, const char* stage_string)
+{
+	if(timer->iterations > 0)
+	{
+		double average = timer->current_avg_time_millis;
+		double std_dev = sqrt(timer->sum_of_square_diff_millis / (timer->iterations));
+		printf(">>> TIMING: %s average time %f milliseconds (std dev: ±%f, over %d iterations), accumulated time %f...\n\n",
+			stage_string, average, std_dev, timer->iterations, timer->accumulated_time_millis);
+	}
 }

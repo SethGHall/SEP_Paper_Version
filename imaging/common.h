@@ -110,20 +110,20 @@ extern "C" {
 #endif
 
 #ifndef NIFTY_GRIDDING
-    #define NIFTY_GRIDDING 0
-#endif
+    #define NIFTY_GRIDDING 1
+#endif  
 
-#ifndef DFT_PREDICTION
+#ifndef DFT_PREDICTION   
     #define DFT_PREDICTION 2
 #endif
 
 
 #ifndef SOLVER
-    #define SOLVER 1
+    #define SOLVER NIFTY_GRIDDING
 #endif
 
 #ifndef PREDICT
-    #define PREDICT 2
+    #define PREDICT NIFTY_GRIDDING
 #endif
 
 #if SINGLE_PRECISION
@@ -193,7 +193,7 @@ extern "C" {
  * Switches between 16-bit or 32-bit visibilities/wproj kernels
  */
 #ifndef ENABLE_16BIT_VISIBILITIES
-	#define ENABLE_16BIT_VISIBILITIES 0
+	#define ENABLE_16BIT_VISIBILITIES 1
 #endif
 
 /**
@@ -239,6 +239,11 @@ extern "C" {
 	 * Possible options for visibility weighting schemes
 	 */
 	enum weighting_scheme { NATURAL, UNIFORM, ROBUST };
+	/**
+	   Possible options for multiscale clean shape. 
+	   default 0 for delta, 1 for tapered truncated parabolas, 2 for truncated gaussians
+	 */
+	enum multiscale_clean_shape { DELTA, PARABOLA, GAUSSIAN };
 
 	/**
 	 * Stores the values for various configurable parameters used in the execution of the imaging pipeline
@@ -255,6 +260,7 @@ extern "C" {
         uint32_t num_total_w_grids; // Total number of w grids 
         uint32_t support; // full support for semicircle gridding kernel
 		double conv_corr_norm_factor;
+		double epsilon;
 	} Nifty_Config;
 
 	typedef struct Config {
@@ -264,6 +270,12 @@ extern "C" {
 		Nifty_Config nifty_config;
 
 		// general
+		int num_host_visibilities;
+		int num_visibilities;          //REDUNDANT - just in for now
+		int num_host_uvws;
+		int vis_batch_size;
+		int uvw_batch_size;
+		
 		char data_input_path[MAX_LEN_CHAR_BUFF];
 		char data_output_path[MAX_LEN_CHAR_BUFF];
 		char imaging_output_id[MAX_LEN_CHAR_BUFF]; //used to uniquely identify output files for a particular imaging cycle
@@ -272,6 +284,7 @@ extern "C" {
 		int num_major_cycles;
 		int num_recievers;
 		int num_baselines;
+		int num_timesteps;
 		int grid_size;
 		double cell_size_rad;
         double fov_deg;
@@ -282,6 +295,25 @@ extern "C" {
 		enum weighting_scheme weighting;
 		double robustness;
 		PRECISION visibility_scaled_weights_sum;
+
+		//Frequencies
+		double frequency_hz_start;        
+		double frequency_bandwidth;
+		double frequency_hz_increment;           //calculated from bandwidth/(numchannels-1)
+		unsigned int number_frequency_channels;
+		unsigned int timesteps_per_batch;      //number of visibility batches to be gridded per frequency
+		
+		
+		//multiscale clean
+		enum multiscale_clean_shape ms_clean_shape;     //enum to chose shape of multiscale cleaning
+		double ms_scale_bias;                //lower scale bias will favour smaller scales during cleaning
+		unsigned int num_ms_supports;
+		double* ms_supports;
+		bool mf_use;                         //flag to use multifrequency scale in gridding
+		double mf_reference_hz;              
+		double mf_spectral_index_overall;    //default spectral index alpha0
+		unsigned int mf_num_moments;         // number of Taylor terms
+		
 
 		bool save_dirty_image;				/**< Flag to enable the saving of the dirty image to file (per major cycle) */
 		bool save_residual_image;			/**< Flag to enable the saving of the residual image to file (per major cycle) */
@@ -305,9 +337,7 @@ extern "C" {
 
 		// gridding
 		bool enable_psf;
-		double frequency_hz;
 		double uv_scale;
-		int num_visibilities;
 		int total_kernel_samples;
 		double w_scale;
 		char visibility_source_file[MAX_LEN_CHAR_BUFF];
@@ -318,6 +348,7 @@ extern "C" {
 		int num_kernels;
 		int oversampling;
 		int image_size;
+		int psf_size;
         double min_abs_w; // minimum absolute w coordinate across all vis (non negative)
         double max_abs_w; // maximum absolute w coordinate across all vis
 		bool load_kernels_from_file;

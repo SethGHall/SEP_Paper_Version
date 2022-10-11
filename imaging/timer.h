@@ -40,23 +40,47 @@ extern "C" {
 	typedef struct Timer {
 		cudaEvent_t start;
 		cudaEvent_t end;
+		double accumulated_time_millis;
+    	double current_avg_time_millis;
+    	double sum_of_square_diff_millis;
+    	uint32_t iterations;
 	} Timer;
 
 	typedef struct Timing {
+
 		Timer gridder;
+		Timer nifty_solve_stack;
+		Timer ifft;
+		Timer solve_correction;
+
+		Timer degridder;
+		Timer nifty_predict_stack;
 		Timer fft;
-		Timer correction;
+		Timer predict_correction;
+
 		Timer deconvolution;
+
 		Timer dft;
+
 		Timer gain_subtraction;
 		Timer gain_calibration;
-		Timer predict;
+
 		Timer solver;
+		Timer solver_data_ingress;
+
+		Timer predict;
+		Timer predict_data_ingress;
+		Timer predict_data_egress;
+
 	} Timing;
 
-	void start_timer(Timer *timer);
+	void init_timer(Timer *timer);
 
-	void stop_timer(Timer *timer);
+	void start_timer(Timer *timer, bool ignore);
+
+	void stop_timer(Timer *timer, bool ignore);
+
+	void print_timer(Timer *timer, const char* stage_string);
 
 #ifdef __cplusplus
 }

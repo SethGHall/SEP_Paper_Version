@@ -42,14 +42,15 @@ extern "C" {
 
 	void dft_set_up(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 
-	void dft_run(Config *config, Device_Mem_Handles *device);
+	void dft_run(Config *config, Device_Mem_Handles *device, Timing *timings);
 
 	void dft_memory_transfer(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device);
 
 	void dft_clean_up(Device_Mem_Handles *device);
 
 	__global__ void direct_fourier_transform(const PRECISION3 *vis_uvw, VIS_PRECISION2 *predicted_vis,
-		const int vis_count, const PRECISION3 *sources, const int source_count);
+		const int vis_count, const PRECISION3 *sources, const int source_count,
+		const int num_channels, const int num_baselines, const PRECISION freq, const PRECISION freqInc);
 
 #ifdef __cplusplus
 }
