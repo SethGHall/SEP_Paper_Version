@@ -90,6 +90,6 @@ LOOP_GAIN:                         0.1
 WEAK_SOURCE_THRESHOLD_CALIBRATION: 0.005
 WEAK_SOURCE_THRESHOLD_IMAGING:     0.0002
 NOISE_FACTOR:                      1.2
-SEARCH_REGION_PERCENT:             100.0
+SEARCH_REGION_PERCENT:             80.0
 
 # Direct Fourier Transform

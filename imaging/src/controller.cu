@@ -673,7 +673,7 @@ bool visibility_UVW_host_setup(Config *config, Host_Mem_Handles *host)
 	for(int vis_index = 0; vis_index < config->num_host_uvws; ++vis_index)
 	{	
 		
-		if(vis_index >= config->num_baselines && vis_index <= config->num_baselines+10)
+		if(vis_index < 5 || vis_index > config->num_host_uvws -5)
 			printf("%d U=%f, V=%f, W=%f..\n",vis_index,host->vis_uvw_coords[vis_index].u,host->vis_uvw_coords[vis_index].v,host->vis_uvw_coords[vis_index].w);
 		
 		if(config->right_ascension)  
@@ -748,6 +748,10 @@ bool visibility_intensity_host_setup(Config *config, Host_Mem_Handles *host)
 	// Copy over from single/double to half/single precision
 	for(int i = 0; i < config->num_host_visibilities; i++)
 	{
+
+		if(i < 5 || i > config->num_host_visibilities -5)
+			printf("%d R=%f, I=%f ..\n",i,temp_loader[i].x ,temp_loader[i].y);
+
 		host->measured_vis[i] = MAKE_VIS_PRECISION2(((VIS_PRECISION) temp_loader[i].x), ((VIS_PRECISION) temp_loader[i].y));
 		host->vis_weights[i] = (PRECISION) 1.0; // TODO: Refactor this to be read from file
 	}

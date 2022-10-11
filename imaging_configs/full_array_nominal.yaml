@@ -2,8 +2,8 @@
 # General
 NUM_RECEIVERS: 197
 
-IMAGE_SIZE: 10240
-PSF_SIZE:   10240
+IMAGE_SIZE: 4096
+PSF_SIZE:   4096
 FOV_DEG:             3.0 # approx
 
 # updated frequency changes
@@ -13,7 +13,7 @@ FREQUENCY_NUM_CHANNELS:            100
 NUM_TIMESTEPS:                     160 
 
 #  added new for batching
-TIMESTEP_BATCH_SIZE:                10 
+TIMESTEP_BATCH_SIZE:                20 
 
 # enum added new for multi-scale synthesis, 
 # default 0 for delta, 1 for tapered truncated parabolas, 2 for truncated gaussians
@@ -31,12 +31,13 @@ MULTIFREQUENCY_NUM_MOMENTS:            3    # number of Taylor terms to use when
 VIS_INTENSITY_FILE: "full_mid_array.vis"
 VIS_UVW_FILE:       "full_mid_array.uvw"
 
+
 INPUT_DATA_PATH:      "/home/seth/DATASETS/nominal/new/"
 OUTPUT_DATA_PATH:     "/home/seth/test/"
 
-NUM_MAJOR_CYCLES: 4
+NUM_MAJOR_CYCLES: 3
 
-RIGHT_ASCENSION: 1
+RIGHT_ASCENSION: 0
 
 # Natural = 0, Uniform = 1, Robust = 2
 WEIGHTING_SCHEME:                  0
@@ -84,7 +85,7 @@ NIFTY_NUM_W_GRIDS_TO_BATCH: 1
 
 # Deconvolution
 NUM_MINOR_CYCLES_CALIBRATION: 1000
-NUM_MINOR_CYCLES_IMAGING: 1000
+NUM_MINOR_CYCLES_IMAGING: 400
 LOOP_GAIN: 0.1
 WEAK_SOURCE_THRESHOLD_CALIBRATION: 0.005
 WEAK_SOURCE_THRESHOLD_IMAGING: 0.0002

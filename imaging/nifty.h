@@ -43,11 +43,11 @@
 extern "C" {
 #endif
 
-    __device__ PRECISION conv_correction(PRECISION support, PRECISION k);
+    __device__ PRECISION conv_corr(const PRECISION support, const PRECISION k);
 
-    __device__ PRECISION exp_semicircle(PRECISION beta, PRECISION x);
+    __device__ PRECISION exp_semicircle(const PRECISION beta, const PRECISION x);
 
-    __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISION signage);
+    __device__ PRECISION2 phase_shift(const PRECISION w, const PRECISION l, const PRECISION m, const PRECISION signage);
 	
 	void nifty_gridding_execute(Config *config, Host_Mem_Handles *host, Device_Mem_Handles *device, Timing *timings);
 	
@@ -83,11 +83,11 @@ extern "C" {
     );
 
     __global__ void nifty_gridding(
-        VIS_PRECISION2 *visibilities, // INPUT(gridding) OR OUTPUT(degridding): complex visibilities
-        const VIS_PRECISION *vis_weights, // INPUT: weight for each visibility
-        const PRECISION3 *uvw_coords, // INPUT: (u, v, w) coordinates for each visibility
+        VIS_PRECISION2* __restrict__ visibilities, // INPUT(gridding) OR OUTPUT(degridding): complex visibilities
+        const VIS_PRECISION* __restrict__ vis_weights, // INPUT: weight for each visibility
+        const PRECISION3* __restrict__ uvw_coords, // INPUT: (u, v, w) coordinates for each visibility
         const uint32_t num_visibilities, // total num visibilities
-        PRECISION2 *w_grid_stack, // OUTPUT: flat array containing 2D computed w grids, presumed initially clear
+        PRECISION2* __restrict__ w_grid_stack, // OUTPUT: flat array containing 2D computed w grids, presumed initially clear
         const uint32_t grid_size, // one dimensional size of w_plane (image_size * upsampling), assumed square
         const int32_t grid_start_w, // signed index of first w grid in current subset stack
         const uint32_t num_w_grids_subset, // number of w grids bound in current subset stack
@@ -107,12 +107,12 @@ extern "C" {
     );
 
     __global__ void apply_w_screen_and_sum(
-        PRECISION *dirty_image, // INPUT & OUTPUT: real plane for accumulating phase corrected w layers across batches
+        PRECISION*  __restrict__ dirty_image, // INPUT & OUTPUT: real plane for accumulating phase corrected w layers across batches
         const uint32_t image_size, // one dimensional size of image plane (grid_size / sigma), assumed square
         const PRECISION pixel_size, // converts pixel index (x, y) to normalised image coordinate (l, m) where l, m between -0.5 and 0.5
-        const PRECISION2 *w_grid_stack, // INPUT: flat array containing 2D computed w layers (w layer = iFFT(w grid))
+        const PRECISION2* const __restrict__ w_grid_stack, // INPUT: flat array containing 2D computed w layers (w layer = iFFT(w grid))
         const uint32_t grid_size, // one dimensional size of w_plane (image_size * upsampling), assumed square
-        const int32_t grid_start_w, // signed index of first w grid in current subset stack
+        const int32_t grid_start_w, // index of first w grid in current subset stack
         const uint32_t num_w_grids_subset, // number of w grids bound in current subset stack
         const PRECISION inv_w_scale, // scaling factor for converting w coord to signed w grid index
         const PRECISION min_plane_w, // w coordinate of smallest w plane

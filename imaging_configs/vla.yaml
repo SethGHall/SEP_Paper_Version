@@ -2,7 +2,7 @@
 # General 
 NUM_RECEIVERS:                     27   
 
-IMAGE_SIZE:			               1024
+IMAGE_SIZE:			                    1024
 PSF_SIZE:                          1024
 FOV_DEG:                           20.0
 
@@ -10,10 +10,10 @@ FOV_DEG:                           20.0
 FREQUENCY_START_HZ:                1E8
 FREQUENCY_BANDWIDTH:               4E7 #total bandwidth across all channels
 FREQUENCY_NUM_CHANNELS:            3 
-NUM_TIMESTEPS:                     500 
+NUM_TIMESTEPS:                      500 
 
 #  added new for batching
-TIMESTEP_BATCH_SIZE:                100
+TIMESTEP_BATCH_SIZE:                100 #100 usually
 
 # enum added new for multi-scale synthesis, 
 # default 0 for delta, 1 for tapered truncated parabolas, 2 for truncated gaussians
@@ -38,7 +38,7 @@ OUTPUT_DATA_PATH:                  "/home/seth/test/"
 
 NUM_MAJOR_CYCLES:                  3
 
-RIGHT_ASCENSION:                   1
+RIGHT_ASCENSION:                   0
 
 # Natural = 0, Uniform = 1, Robust = 2
 WEIGHTING_SCHEME:                  0

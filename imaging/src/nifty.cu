@@ -900,7 +900,7 @@ double calculate_legendre_root(int32_t i, int32_t n, double accuracy, double *we
 * Note this convolutional correction is not normalised, 
 * but is normalised during use in convolution correction by C(0) to get max of 1
 **********************************************************************/
-__device__ PRECISION conv_corr(PRECISION support, PRECISION k)
+__device__ PRECISION conv_corr(const PRECISION support, const PRECISION k)
 {
     PRECISION correction = 0.0;
     uint32_t p = (uint32_t)(CEIL(PRECISION(1.5)*support + PRECISION(2.0)));
@@ -917,14 +917,14 @@ __device__ PRECISION conv_corr(PRECISION support, PRECISION k)
  * Source Paper: A parallel non-uniform fast Fourier transform library based on an "exponential of semicircle" kernel
  * Address: https://arxiv.org/abs/1808.06736
  **********************************************************************/
-__device__ PRECISION exp_semicircle(PRECISION beta, PRECISION x)
+__device__ PRECISION exp_semicircle(const PRECISION beta, const PRECISION x)
 {
 	PRECISION xx = x*x;
 
     if (xx > 1.0)  // to ensure we don't try to take the square root of a negative number
         return (0.0);
     else
-		return VEXP(beta*(VSQRT(1.0 - xx) - 1.0));
+		return ((xx > PRECISION(1.0)) ? PRECISION(1.0) : VEXP(beta*(VSQRT(PRECISION(1.0) - xx) - PRECISION(1.0))));
         //return (VEXP(beta*(VSQRT(VIS_PRECISION(1.0) - (xx)) - VIS_PRECISION(1.0))));
 } 
 
@@ -933,13 +933,13 @@ __device__ PRECISION exp_semicircle(PRECISION beta, PRECISION x)
  * w layer (note: w layer = iFFT(w grid))
  * Note: l and m are expected to be in the range  [-0.5, 0.5]
  **********************************************************************/
-__device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISION signage)
+__device__ PRECISION2 phase_shift(const PRECISION w, const PRECISION l, const PRECISION m, const PRECISION signage)
 {
     // calc the sum of squares
-    PRECISION sos = l*l + m*m;
-    PRECISION nm1 = (-sos)/(SQRT(PRECISION(1.0)-sos) + PRECISION(1.0));
-    PRECISION x = PRECISION(2.0)*PI*w*(nm1);
-    PRECISION xn = PRECISION(1.0)/(nm1 + PRECISION(1.0));
+    const PRECISION sos = l*l + m*m;
+    const PRECISION nm1 = (-sos)/(SQRT(PRECISION(1.0)-sos) + PRECISION(1.0));
+    const PRECISION x = PRECISION(2.0)*PI*w*(nm1);
+    const PRECISION xn = PRECISION(1.0)/(nm1 + PRECISION(1.0));
     PRECISION sinx;
     PRECISION cosx;
     // signage = -1.0 if solving, 1.0 if predicting
@@ -953,12 +953,12 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
  **********************************************************************/
  __global__ void nifty_gridding(
     
-    VIS_PRECISION2 *visibilities, // INPUT(gridding) OR OUTPUT(degridding): complex visibilities
-    const VIS_PRECISION *vis_weights, // INPUT: weight for each visibility
-    const PRECISION3 *uvw_coords, // INPUT: (u, v, w) coordinates for each visibility
+    VIS_PRECISION2* __restrict__ visibilities, // INPUT(gridding) OR OUTPUT(degridding): complex visibilities
+    const VIS_PRECISION* const __restrict__  vis_weights, // INPUT: weight for each visibility
+    const PRECISION3* __restrict__ uvw_coords, // INPUT: (u, v, w) coordinates for each visibility
     const uint32_t num_visibilities, // total num visibilities
 
-    PRECISION2 *w_grid_stack, // OUTPUT: flat array containing 2D computed w grids, presumed initially clear
+    PRECISION2* __restrict__ w_grid_stack, // OUTPUT: flat array containing 2D computed w grids, presumed initially clear
     const uint32_t grid_size, // one dimensional size of w_plane (image_size * upsampling), assumed square
     const int32_t grid_start_w, // signed index of first w grid in current subset stack
     const uint32_t num_w_grids_subset, // number of w grids bound in current subset stack
@@ -992,54 +992,10 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
 		
 		PRECISION freqScale = (metres_wavelength_scale + channelNumber*freqInc) / PRECISION(SPEED_OF_LIGHT); //meters to wavelengths conversion
 		
-		local_uvw.x *= freqScale;
-		local_uvw.y *= freqScale;
-		local_uvw.z *= freqScale;
-		
-		
-        const PRECISION half_support = PRECISION(support)/2.0; // NOTE confirm everyone's understanding of what support means eg when even/odd
-        const int32_t grid_min_uv = -(int32_t)grid_size/2; // minimum coordinate on grid along u or v axes
-        const int32_t grid_max_uv = ((int32_t)grid_size-1)/2; // maximum coordinate on grid along u or v axes
-
+    
         // Determine whether to flip visibility coordinates, so w is usually positive
         VIS_PRECISION flip = (local_uvw.z < 0.0) ? -1.0 : 1.0; 
-
-        // Calculate bounds of where gridding kernel will be applied for this visibility
-        PRECISION3 uvw_coord = MAKE_PRECISION3(
-            local_uvw.x * uv_scale * (PRECISION)flip,
-            local_uvw.y * uv_scale * (PRECISION)flip,
-            (local_uvw.z * (PRECISION)flip - min_plane_w) * w_scale
-        );
-
-        int32_t grid_u_least = max((int32_t)CEIL(uvw_coord.x-(PRECISION)half_support), grid_min_uv);
-        int32_t grid_u_largest = min((int32_t)FLOOR(uvw_coord.x+(PRECISION)half_support), grid_max_uv);
-        int32_t grid_v_least = max((int32_t)CEIL(uvw_coord.y-(PRECISION)half_support), grid_min_uv);
-        int32_t grid_v_largest = min((int32_t)FLOOR(uvw_coord.y+(PRECISION)half_support), grid_max_uv);
-        int32_t grid_w_least = max((int32_t)CEIL(uvw_coord.z-(PRECISION)half_support), grid_start_w);
-        int32_t grid_w_largest = min((int32_t)FLOOR(uvw_coord.z+(PRECISION)half_support), grid_start_w+(int32_t)num_w_grids_subset-1);
-        // perform w coord check first to help short-circuit CUDA kernel execution
-        if ((grid_w_least>grid_w_largest) || (grid_u_least>grid_u_largest) || (grid_v_least>grid_v_largest))
-        {
-            return; // this visibility has no overlap with the current subset stack so avoid further calculations with this visibility
-        }
-
-        // calculate the necessary kernel values along u and v directions for this uvw_coord
-        VIS_PRECISION inv_half_support = (VIS_PRECISION)1.0/(VIS_PRECISION)half_support;
-
-        // bound above the maximum possible support for use in nifty_gridding kernel when precalculating kernel values
-        VIS_PRECISION kernel_u[KERNEL_SUPPORT_BOUND];
-        uint32_t kernel_index_u = 0;
-        for (int32_t grid_coord_u=grid_u_least; grid_coord_u<=grid_u_largest; grid_coord_u++)
-        {
-            kernel_u[kernel_index_u++] = exp_semicircle(beta, (VIS_PRECISION)(grid_coord_u-uvw_coord.x)*inv_half_support);
-        }
-
-        VIS_PRECISION kernel_v[KERNEL_SUPPORT_BOUND];
-        uint32_t kernel_index_v = 0;
-        for (int32_t grid_coord_v=grid_v_least; grid_coord_v<=grid_v_largest; grid_coord_v++)
-        {
-            kernel_v[kernel_index_v++] = exp_semicircle(VIS_PRECISION(beta), (VIS_PRECISION)(grid_coord_v-uvw_coord.y)*inv_half_support);
-        }
+        const PRECISION inv_wavelength = PRECISION(flip) * freqScale;
 
         VIS_PRECISION2 vis_weighted = MAKE_VIS_PRECISION2(0.0, 0.0);
         if(solving)
@@ -1047,15 +1003,58 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
             vis_weighted = (generating_psf) ? MAKE_VIS_PRECISION2(1.0, 0.0) : visibilities[i];
 			
             vis_weighted.x *= vis_weights[i];
-            vis_weighted.y *= vis_weights[i] * flip; // complex conjugate for negative w coords
+            vis_weighted.y *= vis_weights[i]; 
+            vis_weighted.y *= flip; // complex conjugate for negative w coords
         }
+
+        // Calculate bounds of where gridding kernel will be applied for this visibility
+        PRECISION3 uvw_coord = MAKE_PRECISION3(
+            local_uvw.x * uv_scale * inv_wavelength,
+            local_uvw.y * uv_scale * inv_wavelength,
+            (local_uvw.z * inv_wavelength - min_plane_w) * w_scale
+        );
+
+        const PRECISION half_support = PRECISION(support)/2.0; // NOTE confirm everyone's understanding of what support means eg when even/odd
+        const int32_t grid_min_uv = -(int32_t)grid_size/2; // minimum coordinate on grid along u or v axes
+        const int32_t grid_max_uv = ((int32_t)grid_size-1)/2; // maximum coordinate on grid along u or v axes
+        const int32_t grid_u_least = max((int32_t)CEIL(uvw_coord.x-(PRECISION)half_support), grid_min_uv);
+        const int32_t grid_u_largest = min((int32_t)FLOOR(uvw_coord.x+(PRECISION)half_support), grid_max_uv);
+        const int32_t grid_v_least = max((int32_t)CEIL(uvw_coord.y-(PRECISION)half_support), grid_min_uv);
+        const int32_t grid_v_largest = min((int32_t)FLOOR(uvw_coord.y+(PRECISION)half_support), grid_max_uv);
+        const int32_t grid_w_least = max((int32_t)CEIL(uvw_coord.z-(PRECISION)half_support), grid_start_w);
+        const int32_t grid_w_largest = min((int32_t)FLOOR(uvw_coord.z+(PRECISION)half_support), grid_start_w+(int32_t)num_w_grids_subset-1);
+        // perform w coord check first to help short-circuit CUDA kernel execution
+        if ((grid_w_least>grid_w_largest) || (grid_u_least>grid_u_largest) || (grid_v_least>grid_v_largest))
+        {
+            return; // this visibility has no overlap with the current subset stack so avoid further calculations with this visibility
+        }
+
+        // calculate the necessary kernel values along u and v directions for this uvw_coord
+        PRECISION inv_half_support = (PRECISION)1.0/(PRECISION)half_support;
+
+        // bound above the maximum possible support for use in nifty_gridding kernel when precalculating kernel values
+        PRECISION kernel_u[KERNEL_SUPPORT_BOUND];
+        uint32_t kernel_index_u = 0;
+        for (int32_t grid_coord_u=grid_u_least; grid_coord_u<=grid_u_largest; grid_coord_u++)
+        {
+            kernel_u[kernel_index_u++] = exp_semicircle(beta, (grid_coord_u-uvw_coord.x)*inv_half_support);
+        }
+
+        PRECISION kernel_v[KERNEL_SUPPORT_BOUND];
+        uint32_t kernel_index_v = 0;
+        for (int32_t grid_coord_v=grid_v_least; grid_coord_v<=grid_v_largest; grid_coord_v++)
+        {
+            kernel_v[kernel_index_v++] = exp_semicircle(beta, (grid_coord_v-uvw_coord.y)*inv_half_support);
+        }
+
+        
 
         // iterate through each w-grid
         const int32_t origin_offset_uv = (int32_t)(grid_size/2); // offset of origin along u or v axes
 		
         for (int32_t grid_coord_w=grid_w_least; grid_coord_w<=grid_w_largest; grid_coord_w++)
         {
-            VIS_PRECISION kernel_w = exp_semicircle(beta, (VIS_PRECISION)(grid_coord_w-uvw_coord.z)*inv_half_support);
+            PRECISION kernel_w = exp_semicircle(beta, (grid_coord_w-uvw_coord.z)*inv_half_support);
             int32_t grid_index_offset_w = (grid_coord_w-grid_start_w)*(int32_t)(grid_size*grid_size);
             kernel_index_v = 0;
             for (int32_t grid_coord_v=grid_v_least; grid_coord_v<=grid_v_largest; grid_coord_v++)
@@ -1065,19 +1064,17 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
                 for (int32_t grid_coord_u=grid_u_least; grid_coord_u<=grid_u_largest; grid_coord_u++)
                 {
                     // apply the separable kernel to the weighted visibility and accumulate at the grid_coord
-                    VIS_PRECISION kernel_value = kernel_u[kernel_index_u] * kernel_v[kernel_index_v] * kernel_w;
+                    PRECISION kernel_value = kernel_u[kernel_index_u] * kernel_v[kernel_index_v] * kernel_w;
                     bool odd_grid_coordinate = ((grid_coord_u + grid_coord_v) & (int32_t)1) != (int32_t)0;
                     kernel_value = (perform_shift_fft && odd_grid_coordinate) ? -kernel_value : kernel_value;
 
                     int32_t grid_offset_uvw = grid_index_offset_vw + (grid_coord_u+origin_offset_uv);
 
-				
-
                     if(solving) // accumulation of visibility onto w-grid plane
                     {	
                         // Atomic add of type double only supported on NVIDIA GPU architecture Pascal and above
-                        atomicAdd(&w_grid_stack[grid_offset_uvw].x, (PRECISION)(vis_weighted.x * kernel_value));
-                        atomicAdd(&w_grid_stack[grid_offset_uvw].y, (PRECISION)(vis_weighted.y * kernel_value));
+                        atomicAdd(&w_grid_stack[grid_offset_uvw].x, PRECISION(vis_weighted.x) * kernel_value);
+                        atomicAdd(&w_grid_stack[grid_offset_uvw].y, PRECISION(vis_weighted.y) * kernel_value);
                     }
                     else // extraction of visibility from w-grid plane
                     {
@@ -1092,11 +1089,8 @@ __device__ PRECISION2 phase_shift(PRECISION w, PRECISION l, PRECISION m, PRECISI
                 kernel_index_v++;
             }
         }
-
         if(!solving) // degridding
-        {	//visibilities[i].x = 0.0;
-			//visibilities[i].y = 0.0;
-            visibilities[i].x += vis_weighted.x;
+        {   visibilities[i].x += vis_weighted.x;
             visibilities[i].y += (vis_weighted.y * flip);
         }
     }
@@ -1127,10 +1121,10 @@ __global__ void scale_for_FFT(PRECISION2 *w_grid_stack, const int num_w_planes, 
  * Parallelised so each CUDA thread processes one pixel in each quadrant of the dirty image
  **********************************************************************/
 __global__ void apply_w_screen_and_sum(
-    PRECISION *dirty_image, // INPUT & OUTPUT: real plane for accumulating phase corrected w layers across batches
+    PRECISION* __restrict__ dirty_image, // INPUT & OUTPUT: real plane for accumulating phase corrected w layers across batches
     const uint32_t image_size, // one dimensional size of image plane (grid_size / sigma), assumed square
     const PRECISION pixel_size, // converts pixel index (x, y) to normalised image coordinate (l, m) where l, m between -0.5 and 0.5
-    const PRECISION2 *w_grid_stack, // INPUT: flat array containing 2D computed w layers (w layer = iFFT(w grid))
+    const PRECISION2* const __restrict__ w_grid_stack, // INPUT: flat array containing 2D computed w layers (w layer = iFFT(w grid))
     const uint32_t grid_size, // one dimensional size of w_plane (image_size * upsampling), assumed square
     const int32_t grid_start_w, // index of first w grid in current subset stack
     const uint32_t num_w_grids_subset, // number of w grids bound in current subset stack

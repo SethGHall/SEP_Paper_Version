@@ -2,7 +2,7 @@
 # General 
 NUM_RECEIVERS:                     160   
 
-IMAGE_SIZE:	                   4096
+IMAGE_SIZE:	                       4096
 PSF_SIZE:                          4096
 FOV_DEG:                           5.5 # approx
 
@@ -12,7 +12,7 @@ FREQUENCY_NUM_CHANNELS:            100
 NUM_TIMESTEPS:                     240 
 
 #  added new for batching
-TIMESTEP_BATCH_SIZE:                1
+TIMESTEP_BATCH_SIZE:                60
 
 # enum added new for multi-scale synthesis, 
 # default 0 for delta, 1 for tapered truncated parabolas, 2 for truncated gaussians
@@ -22,7 +22,7 @@ MULTISCALE_SCALE_BIAS:              0.6
 NUM_MULTISCALE_SUPPORTS:            4    #full supports for scaled cleaning shapes if not delta, assume first being 1 and powers of 2 eg 4 = [1.0, 2.0, 4.0, 8.0] 
 
 #Added new for multi-frequency synthesis
-MULTIFREQUENCY_USE:                    0    # default to use multifrequency scaling in gridder
+MULTIFREQUENCY_USE:                    1    # default to use multifrequency scaling in gridder
 MULTIFREQUENCY_REFERENCE_HZ:           0.0  # default 0 if calculate reference vref = mean of lowest and highest frequency 
 MULTIFREQUENCY_SPECTRAL_INDEX_OVERALL: 0.6  # default overall spectral index alpha0
 MULTIFREQUENCY_NUM_MOMENTS:            3    # number of Taylor terms to use when working with multifrequency visibilities
@@ -65,7 +65,7 @@ USE_DEFAULT_GAINS:                 1
 DEFAULT_GAINS_FILE:                "default_gains.csv"
 
 # Gridding
-GRID_PADDING_SCALAR:               1.2
+GRID_PADDING_SCALAR:               2.0
 MIN_ABS_W:                         0.000040         # Given in Metres!
 MAX_ABS_W:                         29301.275391     # Given in Metres!
 
