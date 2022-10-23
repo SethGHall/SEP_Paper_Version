@@ -2,7 +2,7 @@
 # General 
 NUM_RECEIVERS:                     512   
 
-IMAGE_SIZE:			                   4096 
+IMAGE_SIZE:			                   16384 
 PSF_SIZE:                          4096
 FOV_DEG:                           8.0 # approx
 
@@ -13,7 +13,7 @@ FREQUENCY_NUM_CHANNELS:            4
 NUM_TIMESTEPS:                     60 
 
 #  added new for batching
-TIMESTEP_BATCH_SIZE:                20
+TIMESTEP_BATCH_SIZE:                1
 
 # enum added new for multi-scale synthesis, 
 # default 0 for delta, 1 for tapered truncated parabolas, 2 for truncated gaussians
@@ -35,7 +35,7 @@ VIS_UVW_FILE:                      "gleam_large.uvw"
 INPUT_DATA_PATH:                   "/home/seth/DATASETS/gleamlarge/new/"
 OUTPUT_DATA_PATH:                  "/home/seth/test/"
 
-NUM_MAJOR_CYCLES:                  3
+NUM_MAJOR_CYCLES:                  2
 
 RIGHT_ASCENSION:                   0
 
@@ -86,7 +86,7 @@ NIFTY_NUM_W_GRIDS_TO_BATCH:	           1
 
 # Deconvolution
 NUM_MINOR_CYCLES_CALIBRATION:      400
-NUM_MINOR_CYCLES_IMAGING:          100
+NUM_MINOR_CYCLES_IMAGING:          1000
 LOOP_GAIN:                         0.1
 WEAK_SOURCE_THRESHOLD_CALIBRATION: 0.005
 WEAK_SOURCE_THRESHOLD_IMAGING:     0.0002

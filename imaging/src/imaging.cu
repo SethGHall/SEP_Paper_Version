@@ -128,7 +128,7 @@ int execute_imaging_pipeline(Config *config, Host_Mem_Handles *host_mem)
 	//visibility_weighting_execute(config, host_mem, &device_mem); 
       
 	  printf("AAAAAAAAAAARGGGGGH THIS IS A HACK... NEED TO DO THE VIS WEIGHTING PROPERLY \n\n");
-	  config->visibility_scaled_weights_sum = config->number_frequency_channels; //config->num_visibilities;
+	  config->visibility_scaled_weights_sum = 1.0f; //config->number_frequency_channels; //config->num_visibilities;
 	// Create PSF HERE will depend what solver we are using
 	generate_psf(config, host_mem, &device_mem, &timers);
 	//extract_pipeline_image(host_mem->h_psf, device_mem.d_psf, config->image_size);
