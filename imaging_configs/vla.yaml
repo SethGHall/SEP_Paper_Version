@@ -79,7 +79,7 @@ SAVE_KERNELS_TO_FILE:              0
 
 # Nifty Gridding
 NIFTY_PERFORM_SHIFT_FFT:		       1
-NIFTY_UPSAMPLING:		               2.0
+NIFTY_UPSAMPLING:		               1.2
 NIFTY_SUPPORT:			               7
 NIFTY_BETA:			                   2.307
 NIFTY_NUM_W_GRIDS_TO_BATCH:	           7
